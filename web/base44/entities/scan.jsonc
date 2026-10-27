@@ -1,0 +1,82 @@
+{
+  "name": "Scan",
+  "type": "object",
+  "properties": {
+    "study_code": {
+      "type": "string"
+    },
+    "timepoint": {
+      "type": "integer"
+    },
+    "days_from_baseline": {
+      "type": "integer"
+    },
+    "scan_ref": {
+      "type": "string"
+    },
+    "series_number": {
+      "type": "integer"
+    },
+    "series_label": {
+      "type": "string"
+    },
+    "slice_thickness_mm": {
+      "type": "number"
+    },
+    "slice_spacing_mm": {
+      "type": "number"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "to do",
+        "in progress",
+        "done"
+      ]
+    }
+  },
+  "required": [
+    "study_code",
+    "timepoint"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        }
+      ]
+    },
+    "read": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        }
+      ]
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

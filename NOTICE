@@ -1,0 +1,39 @@
+Baseline: lung nodule measurement on CT, a research aid
+The code in this repository is under the MIT License (see LICENSE).
+
+Research use only. Not a medical device. Baseline does not diagnose, and its measurements are not for clinical decisions.
+
+This repository contains no model weights and no scans. The parts below are used by Baseline under their own licences.
+
+1. nnInteractive (the outline model)
+   Isensee F., Rokuss M., Kraemer L. et al. nnInteractive: Redefining 3D Promptable Segmentation. 2025. arXiv:2503.08373.
+   German Cancer Research Center (DKFZ), https://github.com/MIC-DKFZ/nnInteractive
+   - Code: Apache License 2.0. Installed from PyPI as a dependency (nninteractive), not copied here.
+   - Model weights: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 (CC BY-NC-SA 4.0): non-commercial use only.
+     They are downloaded from their publisher (Hugging Face, MIC-DKFZ/nnInteractive) when the tool is installed.
+     They are never part of this repository.
+
+2. Practice scans (three public patients, downloaded when the tool is installed; never part of this repository)
+   From The Cancer Imaging Archive (TCIA):
+   - RIDER Lung CT. Zhao B., Schwartz L. H., Kris M. G., Riely G. J. (2015). Coffee-break lung CT collection with scan
+     images reconstructed at multiple imaging parameters (Version 3). The Cancer Imaging Archive.
+     https://doi.org/10.7937/k9/tcia.2015.u1x8a5nr
+     Licence: Creative Commons Attribution 4.0 (CC BY 4.0).
+   - RIDER-LungCT-Seg. Wee L., Aerts H. J. W. L., Kalendralis P., Dekker A. (2020). RIDER Lung CT Segmentation Labels
+     from: Decoding tumour phenotype by noninvasive imaging using a quantitative radiomics approach [Data set].
+     The Cancer Imaging Archive. https://doi.org/10.7937/tcia.2020.jit9grk8
+     Licence: Creative Commons Attribution 3.0 (CC BY 3.0), as listed by TCIA and NCI Imaging Data Commons.
+
+3. NCI Imaging Data Commons (the download path for the practice scans)
+   The scans are downloaded with idc-index from NCI Imaging Data Commons, which mirrors these TCIA collections.
+   https://portal.imaging.datacommons.cancer.gov
+   Fedorov A. et al. National Cancer Institute Imaging Data Commons: Toward Transparency, Reproducibility, and
+   Scalability in Imaging Artificial Intelligence. RadioGraphics (2023). https://doi.org/10.1148/rg.230180
+
+4. Atkinson Hyperlegible Next (the page's typeface)
+   Copyright 2020-2024 The Atkinson Hyperlegible Next Project Authors (Braille Institute of America).
+   SIL Open Font License 1.1. The font files and the licence are in web/src/fonts/ (OFL.txt). The font is bundled
+   with the page, so nothing is fetched from the internet.
+
+Other open-source packages (FastAPI, PyTorch, SimpleITK, pydicom, React, Vite and others) are installed by the
+package managers from the lock files (engine/uv.lock, web/package-lock.json), each under its own licence.

@@ -1,0 +1,28 @@
+name: release-page
+# A pushed tag v<VERSION> makes the release: the built local page (baseline-page.zip), from the tag's own commit.
+# Setup downloads it when Node is missing, so the page on http://localhost:8000 always exists.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag must equal v$(cat VERSION)
+        run: |
+          want="v$(cat VERSION)"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then echo "Tag $GITHUB_REF_NAME does not match VERSION ($want)."; exit 1; fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the local page (scripts/build-page.sh)
+        run: bash scripts/build-page.sh
+      - name: Create the release with baseline-page.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" baseline-page.zip --verify-tag --title "Baseline $GITHUB_REF_NAME" \
+            --notes "Research use only. baseline-page.zip is the built local page; setup downloads it when Node is missing. Changes: see CHANGELOG.md."

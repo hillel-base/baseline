@@ -1,0 +1,57 @@
+name: windows-setup
+# A clean Windows machine: install.ps1 (run the way "irm ... | iex" runs it) installs from this commit's own files,
+# starts the engine, and one click on a practice patient must give an outline.
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      BASELINE_NO_OPEN: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install from this commit and start the engine (install.ps1)
+        shell: powershell
+        run: |
+          $env:BASELINE_DIR = Join-Path $env:RUNNER_TEMP "Baseline"
+          $env:BASELINE_SOURCE = "file:///" + ($PWD.Path -replace '\\', '/')  # this checkout, not GitHub's main
+          $env:LUNG_RUNS_DIR = Join-Path $env:RUNNER_TEMP "runs"
+          $p = Start-Process powershell -ArgumentList '-NoProfile', '-Command', 'Get-Content -Raw .\install.ps1 | Invoke-Expression' `
+            -WorkingDirectory $PWD.Path -RedirectStandardOutput "$env:RUNNER_TEMP\setup.out" -RedirectStandardError "$env:RUNNER_TEMP\setup.err" -PassThru
+          $deadline = (Get-Date).AddMinutes(50)
+          while ($true) {
+            try { Invoke-RestMethod "http://localhost:8000/api/info" -TimeoutSec 3 | Out-Null; break } catch { }
+            if ($p.HasExited) { Get-Content "$env:RUNNER_TEMP\setup.out","$env:RUNNER_TEMP\setup.err"; throw "install.ps1 exited early with code $($p.ExitCode)" }
+            if ((Get-Date) -gt $deadline) { throw "setup timed out" }
+            Start-Sleep -Seconds 5
+          }
+          Get-Content "$env:RUNNER_TEMP\setup.out"
+          # same step as the engine: the runner kills processes left behind by a finished step
+          try {
+            $o = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/scans/RIDER-1286684383_test/nodules" `
+              -ContentType "application/json" -Body '{"z":161,"y":321,"x":330}' -TimeoutSec 900
+            "volume_ml=$($o.volume_ml) long_mm=$($o.long_mm) short_mm=$($o.short_mm) seconds=$($o.seconds)"
+            if (-not ($o.volume_ml -gt 0)) { throw "volume_ml is not above 0" }
+          } finally {
+            taskkill /F /T /PID $p.Id
+            $global:LASTEXITCODE = 0
+          }
+      - name: Collect logs
+        if: always()
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force logs | Out-Null
+          Copy-Item "$env:RUNNER_TEMP\runs\setup-*.jsonl" logs -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP\setup.out","$env:RUNNER_TEMP\setup.err" logs -ErrorAction SilentlyContinue
+          if (Test-Path logs\setup-*.jsonl) { Get-Content logs\setup-*.jsonl }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: setup-logs
+          path: logs/

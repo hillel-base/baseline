@@ -1,0 +1,153 @@
+{
+  "name": "NoduleMeasurement",
+  "type": "object",
+  "properties": {
+    "scan_id": {
+      "type": "string"
+    },
+    "nodule_label": {
+      "type": "string"
+    },
+    "previous_id": {
+      "type": "string"
+    },
+    "lobe": {
+      "type": "string",
+      "enum": [
+        "RUL",
+        "RML",
+        "RLL",
+        "LUL",
+        "LLL",
+        "unknown"
+      ],
+      "default": "unknown"
+    },
+    "position_voxel": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "long_axis_mm": {
+      "type": "number"
+    },
+    "short_axis_mm": {
+      "type": "number"
+    },
+    "volume_ml": {
+      "type": "number"
+    },
+    "depth_mm": {
+      "type": "number"
+    },
+    "width_method": {
+      "type": "string",
+      "enum": [
+        "edge to edge",
+        "centre to centre"
+      ]
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "tool approved",
+        "tool edited",
+        "manual"
+      ]
+    },
+    "clicks": {
+      "type": "integer"
+    },
+    "corrections": {
+      "type": "integer"
+    },
+    "edit_seconds": {
+      "type": "number"
+    },
+    "engine_version": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string",
+      "enum": [
+        "vessel attached",
+        "ground-glass",
+        "uncertain",
+        "none"
+      ]
+    },
+    "approved": {
+      "type": "boolean"
+    },
+    "approved_by": {
+      "type": "string"
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "practice": {
+      "type": "boolean"
+    },
+    "replaces_id": {
+      "type": "string"
+    },
+    "removed_reason": {
+      "type": "string",
+      "enum": [
+        "wrong nodule",
+        "wrong scan",
+        "duplicate",
+        "recorded by mistake"
+      ]
+    }
+  },
+  "required": [
+    "scan_id",
+    "nodule_label"
+  ],
+  "rls": {
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        }
+      ]
+    },
+    "read": {
+      "$or": [
+        {
+          "user_condition": {
+            "role": "admin"
+          }
+        },
+        {
+          "user_condition": {
+            "role": "user"
+          }
+        }
+      ]
+    },
+    "update": {
+      "user_condition": {
+        "role": "admin"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "role": "admin"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+data/
+runs/
+.venv/
+__pycache__/
+.DS_Store
+web/node_modules/
+web/dist/
+web/dist-e2e/
+web/test-results/
+web/playwright-report/
+web/public/demo/
+web/e2e/screenshots/
+baseline-page.zip

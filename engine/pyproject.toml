@@ -1,0 +1,31 @@
+[project]
+name = "lung-engine"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.162.0",
+    "idc-index>=0.13.4",
+    "nnInteractive==2.6.0",
+    "numpy>=2.4.6",
+    "psutil",
+    "pydicom>=3.0.2",
+    "scipy",
+    "simpleitk>=2.5.6",
+    "torch",
+    "uvicorn>=0.54.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "model: needs the nnInteractive weights and a graphics chip",
+    "data: needs the RIDER scans",
+    "network: needs internet",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.0",
+    "pydicom",
+    "pytest>=9.1.1",
+]

@@ -1,0 +1,1 @@
+interface ImportMetaEnv { readonly VITE_HOSTED?: string; readonly VITE_ENGINE_URL?: string; readonly VITE_BASE44_FAKE?: string; readonly VITE_BASE44_APP_ID?: string; readonly VITE_PRACTICE_SERVERS?: string }
