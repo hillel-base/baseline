@@ -17,7 +17,7 @@ test("practice path: each step moves on by itself when its condition becomes tru
   expect(ids([f({ practice: true }), f(live), f({ ...live, sheet: true }), f({ ...live, scan: CASE.test }), f({ ...live, scan: CASE.test, measured: true })]))
     .toEqual(["engine", "patients", "baseline", "cross", "check"]);
   let t = start(f({ practice: true }));
-  expect(show(t, f({ practice: true })).anchors[0]).toEqual({ sel: "button", name: /^Practice server$/ });
+  expect(show(t, f({ practice: true })).anchors[0]).toEqual({ sel: "button", name: /^Use the practice server$/ });
   t = observe(observe(t, f(live)), f({ ...live, sheet: true, patientN: 3 }));
   const s = show(t, f({ ...live, sheet: true, patientN: 3 }));
   expect(s.lines[0]).toBe("Press Practice patient 3. Then press Open beside Baseline.");
@@ -191,10 +191,11 @@ test("with Practice rows off on the Study table, steps 8 and 10 first point at t
 test("while the local engine is awaited, step 1 says what its arrow points at", () => {
   const t = start(f({ practice: true }));
   const waiting = show(t, f({ practice: true, local: true }));
-  expect(waiting.anchors[0]).toEqual({ sel: "button", name: /^Your own computer$/ });
-  expect(waiting.lines.join(" ")).not.toContain("Press Practice server");
-  expect(waiting.lines.join(" ")).toContain("Your own computer");
-  expect(show(t, f({ local: true })).lines.join(" ")).toContain("Use my local engine");
+  expect(waiting.anchors).toEqual([{ sel: "button", name: /^Use your own computer$/ }]);
+  expect(waiting.lines.join(" ")).not.toContain("Press Use the practice server");
+  expect(waiting.lines.join(" ")).toContain("You pressed Use your own computer.");
+  expect(show(t, f({ local: true })).lines.join(" ")).toContain("You pressed Use your own computer.");
+  expect(show(t, f({})).lines).toEqual(["Choose where the tool runs.", "Press Use your own computer. The tool must be running on this computer."]); // no practice server ready
 });
 
 test("controls are named as the page shows them: Find (beside N1), and the Patients button by its own label", () => {

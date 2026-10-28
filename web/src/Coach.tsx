@@ -35,7 +35,7 @@ function read(doc: Document, scan: string | undefined, patientN: number | undefi
     tab: tab ? nameOf(tab) : "", // "" on the install view, which has no tab
     live: !!line,
     local: !!doc.querySelector('iframe[title="Patients"]') || !!line?.textContent?.startsWith("Your own computer") || [...doc.querySelectorAll(".shell-status")].some((e) => e.textContent?.includes(WAITING_LOCAL)),
-    practice: !!named(doc, "button", /^Practice server$/),
+    practice: !!named(doc, "button:not(:disabled)", /^Use the practice server$/), // a practice server is ready
     sheet: !!doc.querySelector('[role="dialog"][aria-label="Patients"]'),
     rowShown: patientN !== undefined && !!named(doc, '[role="dialog"][aria-label="Patients"] .pp-pt[aria-pressed="true"]', new RegExp(`^Practice patient ${patientN}(?!\\d)`)),
     measured: /\d/.test(panel?.querySelector(".m-volume")?.textContent ?? ""),

@@ -42,10 +42,10 @@ const onRetest = (f: Facts) => f.scan === CASE.retest;
 export const STEPS: Step[] = [
   { id: "engine", n: 1, tab: "Measure", done: (f) => f.live,
     lines: (f) => (f.live ? ["Connected. The line above the image says where the tool runs."]
-      : f.local ? ["Choose where the tool runs.", `You pressed ${f.practice ? "Your own computer" : "Use my local engine"}. This step moves on once the tool on this computer answers.`]
-      : f.practice ? ["Choose where the tool runs.", "Press Practice server: there is nothing to install.", "Your own computer also works, once the tool is installed there."]
-      : ["Choose where the tool runs.", "Press Use my local engine. The tool must be running on this computer."]),
-    at: (f) => (f.live ? [{ sel: ".shell-line" }] : [...(f.practice && !f.local ? [button("Practice server")] : []), button("Your own computer"), button("Use my local engine")]) },
+      : f.local ? ["Choose where the tool runs.", "You pressed Use your own computer. This step moves on once the tool on this computer answers."]
+      : f.practice ? ["Choose where the tool runs.", "Press Use the practice server: there is nothing to install.", "Your own computer also works, once the tool is installed there."]
+      : ["Choose where the tool runs.", "Press Use your own computer. The tool must be running on this computer."]),
+    at: (f) => (f.live ? [{ sel: ".shell-line" }] : [...(f.practice && !f.local ? [button("Use the practice server")] : []), button("Use your own computer")]) },
   { id: "patients", n: 2, tab: "Measure", when: (f) => !f.local, done: (f) => f.sheet, // the local engine's panel is a frame this page cannot reach into: step 3 says it in words
     lines: (f) => [f.patientsLabel ? `Press ${f.patientsLabel}, above the image, to open the Patients panel.` : "Press the Patients button above the image."], at: (f) => (f.sheet ? [{ sel: SHEET }] : [PATIENTS]) },
   { id: "baseline", n: 3, tab: "Measure", done: (f) => f.scan === CASE.test,

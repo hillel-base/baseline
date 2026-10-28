@@ -5,8 +5,8 @@ import { defineConfig } from "@playwright/test";
 
 const PORT = process.env.LUNG_E2E_PORT ?? "8205"; // 8000 is kept for your own engine
 const data = process.env.LUNG_DATA_DIR;
-const demoOnly = !!process.env.DEMO_ONLY; // the Demo e2e needs neither the engine nor the data
-if (!data && !demoOnly) throw new Error("Set LUNG_DATA_DIR to the RIDER data folder before running the e2e tests.");
+const noEngine = !!process.env.NO_ENGINE; // tests that need neither the engine nor the data: the signed-out check (deployed) and the seeded Study table tests
+if (!data && !noEngine) throw new Error("Set LUNG_DATA_DIR to the RIDER data folder before running the e2e tests.");
 
 // A clone that is never left half-made: copy into <root>.part, then rename. cp -c clones on APFS (no extra disk); elsewhere cpSync copies. -L: the data folder's series are links, and a link would point out of the root (the engine refuses it).
 function cloneInto(root: string, copies: [string, string][], after?: (part: string) => void) {
@@ -23,7 +23,7 @@ function cloneInto(root: string, copies: [string, string][], after?: (part: stri
 
 // Folder-browser test root: holds only a copy of one development scan.
 const browse = resolve("node_modules/.cache/lung-browse-root");
-if (!demoOnly) { // the Demo run has no data to copy
+if (!noEngine) { // no data to copy
   if (!existsSync(browse + "/scan")) rmSync(browse, { recursive: true, force: true }); // an older, half-made root
   cloneInto(browse, [[`${data}/RIDER-1286684383/ct_test`, "scan"]]);
   // The hosted frame e2e: a made-up study folder in the browse root. Two development patients' series under made-up names and dates, written into the copies' headers only.
@@ -35,7 +35,7 @@ if (!demoOnly) { // the Demo run has no data to copy
 // Only started when wanted (CODED_E2E=1 or --project=codes): a second engine holds a second model, and nothing else needs it.
 //   CODED_E2E=1 LUNG_DATA_DIR=... npx playwright test --project=codes
 const CODED_PORT = process.env.LUNG_E2E_CODED_PORT ?? "8206", CODED_WEB = process.env.LUNG_E2E_CODED_WEB ?? "4175";
-const wantCodes = !demoOnly && (process.env.CODED_E2E === "1" || process.argv.some((a) => /(^|=)codes$/.test(a)));
+const wantCodes = !noEngine && (process.env.CODED_E2E === "1" || process.argv.some((a) => /(^|=)codes$/.test(a)));
 const coded = resolve("node_modules/.cache/lung-coded-root");
 if (wantCodes) cloneInto(coded, [["ct_test", "Jane_Doe_Test/ct_test"], ["ct_retest", "Jane_Doe_Test/ct_retest"]].map(([s, to]) => [`${data}/RIDER-1286684383/${s}`, to] as [string, string]));
 
@@ -45,13 +45,12 @@ export default defineConfig({
   workers: 1, // the engine holds one nodule at a time: tests that share it must not overlap
   projects: [
     { name: "local", testMatch: ["slices.spec.ts", "copilot.spec.ts"], use: { baseURL: `http://localhost:${PORT}` } },
-    { name: "demo", testMatch: "hosted-demo.spec.ts", use: { baseURL: "http://localhost:4173" } },
     { name: "deployed", testMatch: "deployed.spec.ts" }, // signed-out checks on the live app; skipped without LUNG_DEPLOYED_URL
     { name: "hosted", testMatch: "hosted.spec.ts", grepInvert: /coded: the hosted/, use: { baseURL: "http://localhost:4173" } }, // the Base44 build with the fake client
     ...(wantCodes ? [{ name: "codes", testMatch: "hosted.spec.ts", grep: /coded: the hosted/, use: { baseURL: `http://localhost:${CODED_WEB}` } }] : []), // the same build against the coded-patient engine
     { name: "tutorial", testMatch: "tutorial.spec.ts", use: { baseURL: "http://localhost:4173" } }, // Tutorial mode on the hosted build: the whole tour with the model, a picture per step
   ],
-  webServer: [...(demoOnly ? [] : [{
+  webServer: [...(noEngine ? [] : [{
     command: `uv run uvicorn lung_engine.app:create_app --factory --port ${PORT}`,
     cwd: "../engine",
     url: `http://localhost:${PORT}/api/scans`,

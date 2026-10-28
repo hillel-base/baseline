@@ -1,12 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { getSlice as getSliceApi, postEvent as postEventApi, type Outline, type Pt, type ScanMeta } from "./api";
+import { getSlice, postEvent, type Outline, type Pt, type ScanMeta } from "./api";
 import { addPoint, aimedHere, axisLabels, edgePixels, imageInput, lineMm, loadingCue, nearestEnd, sliceLabel, upLabel, stepZ, toVoxel, unpackMask, wheelNotches, wheelStep, windowToRGBA, zOfImage } from "./image";
 import { tickGroups } from "./list";
 import { sliceQueue, wishes } from "./slices";
 import { MAX_SCALE, STEP, centreOn, fitView, gestureLog, imageToScreen, panBy, screenToImage, wheelFactor, zoomAt, zoomToRect, type Rect, type Size, type View } from "./view";
 
 type Props = { scan: ScanMeta; z: number; onZ: (z: number) => void; outline?: Outline; pending: boolean; onPick: (p: { y: number; x: number; shift: boolean }) => void; caption?: string[];
-  load?: (id: string, z: number, signal?: AbortSignal) => Promise<Int16Array>; target?: { z: number; y: number; x: number; label?: string; tone?: "add" | "remove" }; // load: another slice source (the Demo, which also sends no events); target: a ring on the spot to click (with a label: a follow-up proposal, in yellow; with a tone: the tutorial's correction, one small ring in the + or - mark's colour)
+  target?: { z: number; y: number; x: number; label?: string; tone?: "add" | "remove" }; // target: a ring on the spot to click (with a label: a follow-up proposal, in yellow; with a tone: the tutorial's correction, one small ring in the + or - mark's colour)
   brush?: { radius: number; erase: boolean }; onStroke?: (z: number, points: Pt[]) => void; // brush: Paint or Erase on an open outline, so a press paints instead of clicking; one stroke is sent on release
   onAxes?: (long: [Pt, Pt], short: [Pt, Pt]) => void; // Axes mode on an open outline: a press is never a click; the axis ends on axis_z have handles, and a real drag of one sends both lines
   suggestions?: { z: number; y: number; x: number; rank: number; off: boolean; measured?: number }[]; corner?: ReactNode; // the finder's: numbered dashed rings on their images and ticks on the slice bar; corner: the finder's button, at the end of the counter line
@@ -34,7 +34,7 @@ const HALO = "rgba(0,0,0,0.7)", HALO_RGBA = [0, 0, 0, 178]; // the thin dark edg
 const OK = "#70b280"; // theme.css --ok: a measured suggestion's ring
 export type SliceViewHandle = { toPNG: () => Promise<Blob>; centre: (y: number, x: number) => void; shown: () => number | undefined }; // centre: that voxel to the middle of the view, zoom unchanged; shown: the slice on the canvas
 
-export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({ scan, z, onZ, outline, pending, onPick, caption = [], load, target, brush, onStroke, onAxes, suggestions, corner, onShown }, ref) {
+export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({ scan, z, onZ, outline, pending, onPick, caption = [], target, brush, onStroke, onAxes, suggestions, corner, onShown }, ref) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
   const queues = useRef(new Map<string, ReturnType<typeof sliceQueue>>()); // by scan; both callers remount the view on a scan change, so it holds one
@@ -46,8 +46,6 @@ export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({
   useEffect(() => () => queues.current.forEach((q) => q.stop()), []); // unmounted (also a scan change): nothing keeps downloading
   const [depth, rows, cols] = scan.shape;
   const inst = scan.instance_numbers;
-  const getSlice = load ?? getSliceApi;
-  const postEvent = load ? () => {} : postEventApi;
   const [failed, setFailed] = useState<number>();
   const box = useRef<HTMLDivElement>(null);
   const marks = useRef<HTMLCanvasElement>(null);

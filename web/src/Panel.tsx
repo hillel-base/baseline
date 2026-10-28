@@ -7,7 +7,7 @@ import { workingText } from "./ui";
 
 type Props = { outline?: Outline; pending: boolean | "outline" | "edit" | "record" | "find"; error?: string; instanceNumbers: number[] | null; mode?: Mode; onMode?: (m: Mode) => void; onUndo?: () => void; onStartOver?: () => void; onGoToAxisSlice: () => void; onNew: () => void;
   brush?: number; onBrush?: (radius: number) => void; snap?: boolean; onSnap?: (on: boolean) => void; // the brush radius in image pixels and Snap to tissue (Paint and Erase)
-  recorded?: number; onRecord?: () => void; onCopy?: () => void; onScreenshot?: () => void; demo?: string; // demo: shown instead of the correction tools, Record and New nodule
+  recorded?: number; onRecord?: () => void; onCopy?: () => void; onScreenshot?: () => void;
   onUndoRecord?: () => void; save?: SaveState; // Undo of the Record on the page; its study-table save (hosted)
   nodule?: number; idle?: string; notice?: string; onKeys?: () => void; device?: string; // device: the engine's, from /api/info // nodule: the number this outline gets (or got); idle: the status before any click
   followup?: ReactNode; finding?: string; proposal?: { text: string; hint?: string; warn?: boolean } }; // follow-up scans: the Earlier nodules section, the status while finding, and the proposal's status
@@ -51,7 +51,7 @@ export function Earlier({ rows, proposed, busy, open, onFind, onMeasure }: { row
 // Two labelled rows: the model's clicks, and edits made by hand. Proposed for review.
 const MODES: [string, [Mode, string, string][]][] = [["Clicks", [["add", "Add", "A"], ["remove", "Remove", "R"]]], ["By hand", [["paint", "Paint", "P"], ["erase", "Erase", "E"], ["axes", "Axes", "X"]]]];
 
-export function Panel({ outline, pending, error, instanceNumbers, mode = "add", onMode, brush = 3, onBrush, snap = false, onSnap, onUndo, onStartOver, onGoToAxisSlice, onNew, recorded, onRecord, onCopy, onScreenshot, onUndoRecord, save, demo, nodule, idle, notice, onKeys, device, followup, finding, proposal }: Props) {
+export function Panel({ outline, pending, error, instanceNumbers, mode = "add", onMode, brush = 3, onBrush, snap = false, onSnap, onUndo, onStartOver, onGoToAxisSlice, onNew, recorded, onRecord, onCopy, onScreenshot, onUndoRecord, save, nodule, idle, notice, onKeys, device, followup, finding, proposal }: Props) {
   const measured = !!outline && !isEmpty(outline);
   const done = recorded !== undefined;
   const step = done ? 4 : pending === "record" ? 3 : measured ? 2 : 1; // 4: all three done
@@ -80,7 +80,7 @@ export function Panel({ outline, pending, error, instanceNumbers, mode = "add", 
   ) : measured && outline.at_window_edge ? (
     <div className="m-status warn" role="alert"><Warn /><span>{EDGE}</span></div>
   ) : measured ? (
-    <div className="m-status" role="status"><Check /><div><b>Outline ready.</b>{!demo && <div className="small muted">{outline.axes_edited ? "Axes set by hand. A click or stroke measures them again." : "Check the edges on a few images. Correct with Add or Remove, then record."} Not saved yet: Record saves this nodule to the table.</div>}</div></div>
+    <div className="m-status" role="status"><Check /><div><b>Outline ready.</b><div className="small muted">{outline.axes_edited ? "Axes set by hand. A click or stroke measures them again." : "Check the edges on a few images. Correct with Add or Remove, then record."} Not saved yet: Record saves this nodule to the table.</div></div></div>
   ) : (
     <div className="m-status" role="status"><span>{idle ?? "Click a nodule to outline it."}</span></div>
   );
@@ -95,11 +95,9 @@ export function Panel({ outline, pending, error, instanceNumbers, mode = "add", 
             {onKeys && <button className="m-link" aria-label="Keyboard shortcuts (?)" data-key="?" onClick={onKeys}>Shortcuts<Kbd k="?" /></button>}
           </div>
         )}
-        {!demo && (
-          <ol className="m-steps" aria-label="Steps">
-            {["Click nodule", "Check, correct", "Record"].map((s, i) => <li key={s} aria-current={i + 1 === step ? "step" : undefined}>{`${i + 1 < step ? "✓" : i + 1} ${s}`}</li>)}
-          </ol>
-        )}
+        <ol className="m-steps" aria-label="Steps">
+          {["Click nodule", "Check, correct", "Record"].map((s, i) => <li key={s} aria-current={i + 1 === step ? "step" : undefined}>{`${i + 1 < step ? "✓" : i + 1} ${s}`}</li>)}
+        </ol>
         {followup}
         <div className="m-card">
           <div><div className="small muted">Volume</div> <Value v={measured ? outline.volume_ml.toFixed(2) : undefined} unit="mL" big /></div>
@@ -117,7 +115,7 @@ export function Panel({ outline, pending, error, instanceNumbers, mode = "add", 
             ) : <div className="small muted">The numbers appear when the outline is ready.</div>}
           </div>
         </div>
-        {!demo && !done && (
+        {!done && (
           <div className="m-tools-panel" role="group" aria-label="Correct the outline">
             {/* Not colour alone: the active mode is bold on a lighter ground, and its key hint lights up. */}
             {MODES.map(([label, row]) => (
@@ -152,7 +150,7 @@ export function Panel({ outline, pending, error, instanceNumbers, mode = "add", 
       <div className="m-panel-foot">
         {notice && <p className="m-notice" role="status">{notice}</p>}
         {status}
-        {!demo && (done ? (
+        {done ? (
           <>
             <button className="m-btn primary wide" aria-label="New nodule (N)" data-key="n" onClick={onNew} disabled={!!pending}>New nodule<Kbd k="N" on /></button>
             <button className="m-btn wide" disabled>Recorded</button>
@@ -162,8 +160,7 @@ export function Panel({ outline, pending, error, instanceNumbers, mode = "add", 
             <button className="m-btn primary wide" aria-label="Record nodule (Enter)" data-key="enter" onClick={onRecord} disabled={!!pending || !measured}>Record nodule<Kbd k="Enter" on={measured && !pending} /></button>
             <button className="m-btn wide" aria-label="New nodule (N)" data-key="n" onClick={onNew} disabled={!!pending || (!outline && !error)}>New nodule<Kbd k="N" /></button>
           </>
-        ))}
-        {demo && <p className="m-notice">{demo}</p>}
+        )}
       </div>
     </section>
   );

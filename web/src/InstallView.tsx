@@ -40,7 +40,7 @@ export function InstallView({ onBack }: { onBack: () => void }) {
         <li>{COMMANDS.map((c) => <Command key={c.cmd} {...c} />)}</li>
         <li>The first start installs the tool's packages and, on a Mac or Linux, the nodule finder, and downloads the model weights and the 8 practice patients: about 3.5 GB on a Mac (about 3 GB more on Linux). It took about 7 minutes on a Mac with Apple silicon (our test). Later starts are quick.</li>
       </ol>
-      <p>The command then opens this page, which connects to the engine on your computer by itself, and your Records are saved to the Study table. If it does not connect, choose Your own computer, or Use my local engine. Chrome asks once whether this site may use apps on your device; allow it.</p>
+      <p>The command then opens this page, which connects to the engine on your computer by itself, and your Records are saved to the Study table. If it does not connect, press Use your own computer. Chrome asks once whether this site may use apps on your device; allow it.</p>
       <p>On a Mac without Chrome, the command opens the tool's own page instead (http://localhost:8000), which works in Safari. That page works without Base44 and saves nothing to it.</p>
       <h3>What you need</h3>
       <ul>

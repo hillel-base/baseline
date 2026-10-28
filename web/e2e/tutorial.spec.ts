@@ -66,10 +66,10 @@ test("tutorial: offered once; the whole tour on the local engine with the model,
   await coach.getByRole("button", { name: "Start", exact: true }).click();
 
   // 1. Where the tool runs (no practice server answers in this run: the local engine)
-  await step(coach, 1, "Press Use my local engine.");
-  await pointsAt(page, page.getByRole("button", { name: "Use my local engine" }));
+  await step(coach, 1, "Press Use your own computer.");
+  await pointsAt(page, page.getByRole("button", { name: "Use your own computer" }));
   await shot(page, "engine");
-  await page.getByRole("button", { name: "Use my local engine" }).click();
+  await page.getByRole("button", { name: "Use your own computer" }).click();
 
   // 3. The local engine's Patients panel is a frame the page cannot reach into: step 2 is left out, and step 3 names the patient and scan in words
   await step(coach, 3, "Open RIDER-2619750334, Baseline, in the Patients panel above the image.");
@@ -254,10 +254,10 @@ test("tutorial: on a practice server, the Tutorial button starts it (an automate
   await page.getByRole("button", { name: "Tutorial", exact: true }).click();
   expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("BODY"); // a mouse click leaves the focus nowhere: Enter still records
 
-  await step(coach, 1, "Press Practice server: there is nothing to install.");
-  await pointsAt(page, page.getByRole("button", { name: "Practice server" }));
+  await step(coach, 1, "Press Use the practice server: there is nothing to install.");
+  await pointsAt(page, page.getByRole("button", { name: "Use the practice server" }));
   await pic("1-engine");
-  await page.getByRole("button", { name: "Practice server" }).click();
+  await page.getByRole("button", { name: "Use the practice server" }).click();
 
   await step(coach, 2, "Press Choose a scan, above the image, to open the Patients panel."); // the button by its own words
   const patients = page.locator('.m-bar button[aria-haspopup="dialog"]');
@@ -331,7 +331,7 @@ test("tutorial: another patient's scan never moves the tour on (the box asks for
   const row = page.getByRole("table", { name: "Study record" }).getByRole("row", { name: /RIDER-2619750334/ });
   const skipTo = async (text: string) => { for (let i = 0; i < 30 && !(await coach.textContent())?.includes(text); i++) await coach.getByRole("button", { name: "Skip", exact: true }).click(); await expect(coach).toContainText(text); };
   await page.getByRole("button", { name: "Tutorial", exact: true }).click();
-  await page.getByRole("button", { name: "Use my local engine" }).click();
+  await page.getByRole("button", { name: "Use your own computer" }).click();
   await step(coach, 3, "Open RIDER-2619750334, Baseline", 30_000);
   const f = page.frameLocator(FRAME), sheet = f.getByRole("dialog", { name: "Patients" });
   const openFromFrame = async (patient: string, open: RegExp) => {

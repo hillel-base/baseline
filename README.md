@@ -69,7 +69,7 @@ It downloads the other 20 patients (CT only, about 5.1 GB; about 10 minutes on o
 If you have an invitation to the Baseline page, choose **Practice server** in Measure. The engine then runs on our server, which has a graphics card, so you install nothing.
 - **Scans:** the 28 public practice patients only.
 - **One person at a time:** others see a short wait message.
-- **Sometimes paused:** the page then says so and names the next step: the Demo (recorded results that need no engine) to try the tool, or your own computer for your own scans.
+- **Sometimes paused:** the page then says so, with Try again, and names the other way: your own computer.
 - **Sleeping:** a server that has not been used for a while sleeps. The page shows it as starting, and it is ready in about 1 minute.
 - **Change:** the top line names where the tool runs ("Practice server · Change" or "Your own computer · Change"). **Change** goes back to the choice. If an outline is not recorded yet, the page asks first. Leaving the practice server frees it for the next person at once.
 

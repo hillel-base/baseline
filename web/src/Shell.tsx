@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DemoView } from "./DemoView";
 import { InstallView } from "./InstallView";
 import { About } from "./About";
 import { App, Logo } from "./App";
@@ -30,7 +29,7 @@ const LOCAL_ENGINE = import.meta.env.VITE_ENGINE_URL ?? "http://localhost:8000";
 export const LOCAL_PROBE_MS = 60_000;
 /** Automatic sleep: after this long without a click on the page, the card stops asking the practice servers, so a forgotten tab cannot keep them awake. */
 export const IDLE_STOP_MS = 15 * 60_000;
-const TABS = ["Measure", "Study table"] as const; // the Demo has no tab: the choice card opens it when no server is ready
+const TABS = ["Measure", "Study table"] as const;
 type Tab = (typeof TABS)[number];
 type Engine = { state: "idle" } | { state: "trying"; local: boolean } | { state: "none" } | { state: "live"; commit: string; model: string; practice?: string; picker?: boolean }; // practice: the server in use
 const PRACTICE = servers(import.meta.env.VITE_PRACTICE_SERVERS); // set at build time; none hides the practice option
@@ -45,12 +44,43 @@ export const REAL_DATA_NOTE = "For real patient data, use the tool's own page on
 export const safariNote = (practice: boolean) => `In Safari, this page cannot reach the tool on your computer. Use Chrome or Firefox${practice ? ", or the practice server" : ""}. The tool's own page on your computer (http://localhost:8000) works in Safari.`;
 const SAFARI = typeof navigator !== "undefined" && isSafari(navigator.userAgent);
 const SAYS: Record<Exclude<PracticeState, "ready"> | "idle", string> = {
-  paused: "The practice server is paused right now. To try the tool, open the Demo. To measure your own scans, run it on your computer", // the card adds " (How to install it)."
-  starting: "The practice server is starting. This takes 1 to 4 minutes; the page connects by itself.",
+  paused: "The practice server is paused right now. To measure your own scans, use your own computer.",
+  starting: "The practice server is waking, about 1 to 4 minutes; the page connects by itself.",
   idle: "This page stopped asking the practice server after 15 minutes without a click.", // its last answer is old, so the card shows this instead
   unavailable: "The practice server is starting or cannot be reached. We will try again.",
   busy: BUSY,
 };
+/** The practice card's status badge, one per state; no state yet: the first ask is on its way. */
+const PILL: Record<PracticeState | "idle" | "checking", { text: string; cls: string; spin?: boolean }> = {
+  checking: { text: "Checking", cls: "", spin: true },
+  ready: { text: "Ready", cls: "ok" },
+  starting: { text: "Waking", cls: "", spin: true },
+  busy: { text: "In use", cls: "warn" },
+  paused: { text: "Paused", cls: "warn" },
+  idle: { text: "Stopped asking", cls: "" },
+  unavailable: { text: "Not reachable", cls: "warn" },
+};
+/** The practice card in each state: its badge, its status line (none when ready or before the first answer) and its button's label. */
+export const practiceCard = (s: PracticeState | "idle" | undefined) =>
+  ({ pill: PILL[s ?? "checking"], said: s && s !== "ready" ? SAYS[s] : undefined, action: s === "busy" || s === "paused" || s === "idle" ? "Try again" : "Use the practice server" });
+export const PRACTICE_PRINT = "Records from practice scans are kept apart from the study record."; // the practice rows (StudyView PRACTICE_LINE)
+/** The practice card while it connects: the button says so at once, and only a wait past SLOW_CONNECT_MS says more, in the small-print line both
+ *  cards always have, so nothing moves; a fast connect goes straight to the tool with no flash of any line. */
+export const SLOW_CONNECT_MS = 400;
+export const connectTexts = (connecting: boolean, slow: boolean) => ({
+  button: connecting ? "Connecting…" : "Use the practice server",
+  print: connecting && slow ? "Connecting to the practice server. This can take a few seconds." : PRACTICE_PRINT,
+});
+/** The practice card as shown: as it is, or while connecting. A connect that started from a card with a status box (Try again from busy or paused,
+ *  the auto-connect after waking) keeps the box, with a connecting line, so its row keeps its height until the tool opens. */
+export const connectingCard = (card: ReturnType<typeof practiceCard>, connecting: boolean, hadBox: boolean, slow: boolean) => {
+  if (!connecting) return { pill: card.pill, said: card.said, button: card.action, print: PRACTICE_PRINT };
+  return { pill: { text: "Connecting", cls: "", spin: true }, said: hadBox ? "Connecting to the practice server…" : undefined, button: "Connecting…",
+    print: hadBox ? PRACTICE_PRINT : connectTexts(true, slow).print };
+};
+const svg = { viewBox: "0 0 24 24", width: 22, height: 22, fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+const SERVER_ICON = <svg {...svg}><rect x="3.5" y="4" width="17" height="6.5" rx="1.5" /><rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5" /><path d="M7 7.25h.01M7 16.75h.01M11 7.25h6M11 16.75h6" /></svg>;
+const LAPTOP_ICON = <svg {...svg}><rect x="5" y="5" width="14" height="10" rx="1.5" /><path d="M2.5 19h19" /></svg>;
 /** The practice servers in list order, the next only when one cannot serve or has been starting for 5 minutes (practice.ts): a visit wakes one T4, not both. */
 const wake = waking();
 const askAll = (urls = PRACTICE) => askInOrder(urls, async (url) => { const s = await probe(url, accessToken()); wake.seen(url, s); return s; }, wake.stuck);
@@ -61,7 +91,7 @@ export const wantsLocal = (search: string, safari = SAFARI) => !safari && new UR
 export const localFrame = (picker: boolean | undefined, safari = SAFARI) => (picker && !safari ? LOCAL_ENGINE : undefined);
 
 /** The live tool. Nothing calls localhost until the visitor clicks the button; the practice servers are asked at once. */
-export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string; onDemo: () => void; onInstall: () => void;
+export function Measure({ uid, onInstall, onTutorial, cross, onScan }: { uid: string; onInstall: () => void; onTutorial?: () => void;
   cross?: { scan: string; z: number; y: number; x: number; tone?: "add" | "remove" }; onScan?: (scan: string | undefined, patients: Patients | null | undefined) => void }) { // the tutorial's two hooks into App
   const [engine, setEngine] = useState<Engine>({ state: "idle" });
   const [practice, setPractice] = useState<{ url: string; state: PracticeState }>();
@@ -69,6 +99,12 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
   const [asking, setAsking] = useState(false); // Try again waits for an answer
   const choseLocal = useRef(false); // once the visitor picks the local engine, the page never moves them to a practice server by itself
   const [idle, setIdle] = useState(false); // no click for IDLE_STOP_MS: the asking stopped until Try again
+  const [slowConnect, setSlowConnect] = useState(false); // a practice connect still waiting after SLOW_CONNECT_MS
+  useEffect(() => {
+    if (engine.state !== "trying" || engine.local) { setSlowConnect(false); return; }
+    const t = setTimeout(() => setSlowConnect(true), SLOW_CONNECT_MS);
+    return () => clearTimeout(t);
+  }, [engine]);
   const clicked = useRef(Date.now());
   useEffect(() => { const on = () => { clicked.current = Date.now(); }; addEventListener("click", on, true); return () => removeEventListener("click", on, true); }, []);
   const [waiting, setWaiting] = useState<{ n: number; note?: string }>({ n: 0 });
@@ -97,11 +133,15 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
   const wait = (others > 0 || waiting.note) && [others > 0 && `${others === 1 ? "1 row is" : `${others} rows are`} waiting for the study table; tried again every ${RETRY_MS / 1000} s.`, waiting.note].filter(Boolean).join(" ");
   const queued = wait && <p className="shell-status warn" role="status">{wait}</p>;
   // A practice server gets the visitor's Base44 token on every call, this check included (its /api/info sends the model only to a signed-in caller); the local engine never does.
+  const shownBox = useRef(false), boxAtConnect = useRef(false); // the practice card showed a status box (at the moment a connect starts)
+  const saidRow = useRef<HTMLDivElement>(null), rowAtConnect = useRef(0); // that box row's height then: kept while connecting, so nothing moves
   const attempt = useRef(0); // the newest connect wins: a slow local answer that arrives after the visitor chose a practice server is ignored
   const connect = (server?: string) => {
     if (!server) choseLocal.current = true;
     const mine = ++attempt.current;
     setBlocked(undefined); setIdle(false); // a connect is a click: the idle stop ends
+    boxAtConnect.current = !!server && shownBox.current;
+    rowAtConnect.current = boxAtConnect.current ? saidRow.current?.offsetHeight ?? 0 : 0;
     setEngine({ state: "trying", local: !server });
     setAuth(server && accessToken());
     probeEngine(server ?? LOCAL_ENGINE, server ? PROBE_MS : LOCAL_PROBE_MS).then(
@@ -181,7 +221,6 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
             <p role="alert">{gone ? PRACTICE_STOPPED : BUSY}</p>
             <div className="m-empty-actions">
               <button className="m-btn primary" onClick={tryAgain} disabled={asking}>Try again</button>
-              {(busy || gone) && <button className="m-btn" onClick={onDemo}>Open the Demo</button>}{/* with no Demo tab, the only way to it while no server answers */}
             </div>
           </> : undefined} /></div>
       </>
@@ -190,54 +229,53 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
   const trying = engine.state === "trying", waitingLocal = engine.state === "trying" && engine.local;
   const toInstall = (text: string) => <a href="#install" onClick={(e) => { e.preventDefault(); onInstall(); }}>{text}</a>; // opens Run it on your computer, in this page
   const none = waitingLocal ? <p className="shell-status" role="status"><span className="shell-spinner" aria-hidden="true" />{WAITING_LOCAL}</p>
-    : trying ? <p role="status">Looking for the engine…</p>
     : engine.state === "none" && <p className="shell-status warn" role="alert">No engine found on this computer. Start it (see {toInstall("Run it on your computer")}), then try again.</p>;
   const safari = SAFARI && <p id="safari-note" className="shell-status warn" role="note">{safariNote(PRACTICE.length > 0)}</p>;
-  // In Safari this https page cannot reach localhost, so the local engine's button is disabled, with the note as its reason.
-  const local = (label: string, primary: boolean) => <button className={primary && !SAFARI ? "shell-btn primary" : "shell-btn"} onClick={() => connect()} disabled={trying || SAFARI} aria-describedby={SAFARI ? "safari-note" : undefined}>{label}</button>;
-  // With no practice server configured, the card stays exactly as before (the deployed page until a server exists).
-  if (!PRACTICE.length) return (
-    <section className="shell-card" aria-label="Local engine">
-      {safari}
-      {queued}
-      <p>Measure uses the engine on this computer.</p>
-      <div className="shell-actions">
-        <button className={SAFARI ? "shell-btn primary" : "shell-btn"} onClick={onDemo}>Open the Demo</button>{/* with no Demo tab, the card is the way to it */}
-        {local("Use my local engine", true)}
-      </div>
-      <p className="shell-note">{REAL_DATA_NOTE}</p>
-      {none}
-    </section>
-  );
-  const s = idle ? "idle" : practice?.state, ready = s === "ready" ? practice : undefined;
-  const btn = (label: string, onClick: () => void, primary = false, disabled = trying) => <button className={primary ? "shell-btn primary" : "shell-btn"} onClick={onClick} disabled={disabled}>{label}</button>;
-  const install = toInstall("How to install it");
+  const s = idle ? "idle" : practice?.state, ready = s === "ready" ? practice : undefined, card = practiceCard(s);
+  const connecting = trying && !waitingLocal, shown = connectingCard(card, connecting, boxAtConnect.current, slowConnect);
+  shownBox.current = !!shown.said;
+  const again = s === "idle" ? () => { setPractice(undefined); setIdle(false); /* a 15-minute-old answer is not shown as now */ } : tryAgain;
+  // The landing: what the tool does, the tutorial, then one card per place the tool can run, the practice card with the server's live state.
+  // Each card's five parts share rows across both cards (CSS subgrid), so the two main buttons sit at one height whatever each card says above them.
   return (
-    <section className="shell-card shell-choice" aria-label="Engine">
-      <h2>Choose where the tool runs</h2>
-      {safari}
+    <section className="landing" aria-label="Engine">
+      <header className="landing-hero">
+        <span className="landing-tag">Research aid</span>
+        <h1>Outline a lung nodule on CT with a click</h1>
+        <p>Then check it, correct it where needed, and record its size in the Study table. A research aid, not a medical device.</p>
+        {onTutorial && <div className="landing-tour"><span>New here?</span><button className="shell-btn" onClick={onTutorial}>Start the tutorial</button></div>}
+      </header>
       {queued}
-      {ready ? <>
-        <div className="shell-options">
-          <div className="shell-option">{btn("Practice server", () => connect(ready.url), true, trying && !waitingLocal)}<p>nothing to install, about 1 s per click</p></div>
-          <div className="shell-option">{local("Your own computer", false)}<p>{install}</p><p className="shell-note">{REAL_DATA_NOTE}</p></div>
-        </div>
-        <p className="shell-note">{SLOW}</p>
-      </> : <>
-        {s && s !== "ready" && <p className="shell-status" role="status">{s === "starting" && <span className="shell-spinner" aria-hidden="true" />}{SAYS[s]}{s === "paused" && <> ({install}).</>}</p>}
-        <div className="shell-actions">
-          {s === "paused" && btn("Open the Demo", onDemo, true, false)}
-          {s === "starting" && btn("Open the Demo meanwhile", onDemo, true, false)}
-          {s === "busy" && btn("Try again", tryAgain, true, asking)}
-          {s === "idle" && btn("Try again", () => { setPractice(undefined); setIdle(false); /* a 15-minute-old answer is not shown as now */ }, true, false)}
-          {s === "idle" && btn("Open the Demo", onDemo, false, false)}
-          {s === "busy" && btn("Open the Demo", onDemo, false, false)}
-          {(!s || s === "unavailable") && btn("Open the Demo", onDemo, SAFARI, false)}{/* no server ready, in every browser: with no Demo tab, the card is the way to it */}
-          {local("Use my local engine", !s || s === "unavailable")}
-        </div>
-        <p className="shell-note">{s !== "paused" && <>{install} · </>}{REAL_DATA_NOTE}</p>{/* paused: the link is in the line above, once on the card */}
-      </>}
-      {none}
+      <h2>Choose where the tool runs</h2>
+      <div className={PRACTICE.length ? "landing-cards" : "landing-cards one"}>
+        {PRACTICE.length > 0 && <article className={ready ? "landing-card is-ready" : "landing-card"} aria-labelledby="landing-practice">
+          <div className="landing-head">
+            <span className="landing-icon">{SERVER_ICON}</span>
+            <h3 id="landing-practice">Practice server</h3>
+            <span className={`landing-pill ${shown.pill.cls}`}>{shown.pill.spin ? <span className="shell-spinner" aria-hidden="true" /> : <span className="landing-dot" aria-hidden="true" />}{shown.pill.text}</span>
+          </div>
+          <ul className="landing-facts"><li>Nothing to install</li><li>Public practice scans</li><li>About 1 s per click</li></ul>
+          <div className="landing-said" ref={saidRow} style={connecting && rowAtConnect.current ? { minHeight: rowAtConnect.current } : undefined}>
+            {shown.said && <p className="shell-status" role="status">{shown.said}</p>}
+          </div>
+          {connecting ? <button className="shell-btn primary" disabled aria-busy>{shown.button}</button>
+            : shown.button === "Try again" ? <button className="shell-btn primary" onClick={again} disabled={s !== "idle" && asking}>Try again</button>
+            : <button className="shell-btn primary" onClick={() => ready && connect(ready.url)} disabled={!ready}>{shown.button}</button>}
+          <p className="shell-note" role={connecting ? "status" : undefined}>{shown.print}</p>
+        </article>}
+        <article className="landing-card" aria-labelledby="landing-local">
+          <div className="landing-head">
+            <span className="landing-icon">{LAPTOP_ICON}</span>
+            <h3 id="landing-local">Your own computer</h3>
+          </div>
+          <ul className="landing-facts"><li>The engine and the scans stay on your computer</li><li>About 7 min to install ({toInstall("How to install it")})</li></ul>
+          <div className="landing-said">{safari}{none}</div>
+          {/* In Safari this https page cannot reach localhost, so the button is disabled, with the note as its reason. Primary only when it is the one choice. */}
+          <button className={PRACTICE.length || SAFARI ? "shell-btn" : "shell-btn primary"} onClick={() => connect()} disabled={trying || SAFARI} aria-describedby={SAFARI ? "safari-note" : undefined}>Use your own computer</button>
+          <p className="shell-note">{REAL_DATA_NOTE}</p>
+        </article>
+      </div>
+      <p className="shell-note landing-slow">{SLOW}</p>
     </section>
   );
 }
@@ -270,7 +308,7 @@ export function Shell() {
   const onStep = useCallback((step?: string) => setTour((t) => (t.step === step ? t : { ...t, step })), []);
   const startTour = () => { markOffered(STORE); setTour((t) => ({ ...t, run: t.run + 1, step: undefined })); setTutorial("on"); }; // no step from an earlier run: no stale cross
   useEffect(() => { if (tutorial === "offer" && session?.kind === "user") markOffered(STORE); }, [tutorial, session?.kind]); // offered once: when it shows
-  const [tab, setTab] = useState<Tab | "Install" | "Demo">("Measure"); // views without a tab: Install (Run it on your computer) and the Demo
+  const [tab, setTab] = useState<Tab | "Install">("Measure"); // Install (Run it on your computer) has no tab
   const [seen, setSeen] = useState<Tab[]>(["Measure"]); // Measure stays mounted once opened, so a scan and its table survive a tab change
   const about = useRef<HTMLDialogElement>(null);
   const [left, setLeft] = useState(0); // this person's rows still waiting: they are sent only when this person signs in again here
@@ -293,10 +331,9 @@ export function Shell() {
       </header>
       {tutorial !== "off" && <Coach key={tour.run} mode={tutorial} scan={tour.scan} patientN={tour.n} onStart={startTour} onDecline={() => setTutorial("off")} onLater={() => { unmarkOffered(STORE); setTutorial("off"); }} onExit={() => setTutorial("off")} onStep={onStep} />}
       <main className="shell-main">
-        {seen.includes("Measure") && <div hidden={tab !== "Measure"}><Measure uid={user.id} onDemo={() => setTab("Demo")} onInstall={() => setTab("Install")}
+        {seen.includes("Measure") && <div hidden={tab !== "Measure"}><Measure uid={user.id} onInstall={() => setTab("Install")} onTutorial={startTour}
           cross={tutorial !== "on" ? undefined : tour.step === "cross" ? CASE.cross : tour.step === "correct" ? CASE.fix : undefined} onScan={tutorial === "on" ? onScan : undefined} /></div>}
         {tab === "Study table" && <StudyView onRemove={(scanRef, m, reason) => box.remove(scanRef, m, reason)} waiting={box.waiting} pending={box.pending} onGoToMeasure={() => pick("Measure")} />}
-        {tab === "Demo" && <DemoView onBack={() => pick("Measure")} />}
         {tab === "Install" && <InstallView onBack={() => pick("Measure")} />}
       </main>
       <footer className="shell-footer">

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4 (2026-10-28)
+
+A new first screen on the hosted page, and the Demo is gone. Research use only.
+
+**The hosted page**
+- The first screen says what the tool does, offers the tutorial, and shows two choices side by side: the practice server, with its live status, and your own computer, with how to install it.
+- The Demo is removed. While no practice server is ready, the page says so (waking, in use, paused) and offers Try again or your own computer.
+- Pressing Use the practice server moves nothing on the page: the button says Connecting…, and a wait of more than a moment says so in the card's small print. The cards' two main buttons sit at one height in every state.
+
 ## 0.1.3 (2026-10-28)
 
 An update refreshes the local page, a richer Study table, and the tutorial starts at Practice patient 1. Research use only.

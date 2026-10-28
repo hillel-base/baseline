@@ -11,7 +11,7 @@ export type ScanMeta = ScanRow & {
   timepoint?: number | null; // a study-folder scan's order among its patient's study days (Baseline 0); null or absent: the RIDER test/retest rule
 };
 
-let base = ""; // "" = the engine serves this page; the hosted page sets http://localhost:8000 after "Use my local engine", or a practice server
+let base = ""; // "" = the engine serves this page; the hosted page sets http://localhost:8000 after "Use your own computer", or a practice server
 let practice = false; // a practice server: its own texts replace the local engine's "see README" ones
 export const setApiBase = (b: string, onPractice = false) => { base = b; practice = onPractice; };
 let auth: string | undefined; // the visitor's Base44 token, set only for a practice server
@@ -83,7 +83,7 @@ export type Outline = {
   volume_ml: number; long_mm: number; short_mm: number; axis_z: number | null;
   long_line: [Pt, Pt] | null; short_line: [Pt, Pt] | null; seconds: number;
   depth_mm: number; width_method: "edge to edge" | "centre to centre";
-  painted?: number; axes_edited?: boolean; // strokes applied; true while hand-set axes replace the outline's own (absent from engines before strokes, and the Demo's recordings)
+  painted?: number; axes_edited?: boolean; // strokes applied; true while hand-set axes replace the outline's own (absent from engines before strokes)
 };
 
 async function post<T = Outline>(url: string, body?: object): Promise<T> {
@@ -125,7 +125,7 @@ export const recordNodule = (o: Pick<Outline, "scan" | "nodule">, link?: Link) =
 /** Reports a UI-only action for the run log. Fire and forget: a logging failure never blocks the user. */
 export const postEvent = (e: { action: "copy_row" | "export_csv" | "screenshot" | "discard" | "delete_row" | "clear_table" | "restore_table" | "start_over" | "zoom" | "zoom_fit" | "zoom_area" | "undo_delete_row" | "followup_confirm" | "followup_moved" | "undo_record" | "save_failed" | "candidate_accept" | "candidate_reject" | "undo_candidate_reject";
   scale?: number; scan?: string; nodule?: number; rows?: number; file?: string; follows?: string; distance_mm?: number; undoes?: string; reason?: string; rank?: number; score?: number }) => {
-  if (e.action === "save_failed" && !base) return; // only the hosted page saves, and before "Use my local engine" "" is the hosted origin, which keeps no log: dropped
+  if (e.action === "save_failed" && !base) return; // only the hosted page saves, and before "Use your own computer" "" is the hosted origin, which keeps no log: dropped
   send("/api/events", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(e) }).catch(() => {});
 };
 
