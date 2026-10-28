@@ -1,7 +1,7 @@
 import { renderToString } from "react-dom/server";
 import { expect, test, vi } from "vitest";
 import { OUT_OF_DATE_NOTE, type MeasurementFields, type ScanFields } from "./study";
-import { RemoveMenu, StudyTable, StudyView, forgetStudy, historyRows, preloadStudy, recordLines, removeLine, type Data } from "./StudyView";
+import { PRACTICE_LINE, RemoveMenu, headLine, StudyTable, StudyView, changeText, forgetStudy, historyRows, matches, preloadStudy, recordLines, removeLine, sortLines, type Data } from "./StudyView";
 
 const lists = vi.hoisted(() => { const l = { scans: [] as unknown[], ms: [] as unknown[], answer: (k: "scans" | "ms"): Promise<unknown> => Promise.resolve(l[k]) }; return l; });
 vi.mock("./base44", async (real) => ({ ...(await real<object>()), entities: { Scan: { list: () => lists.answer("scans") }, NoduleMeasurement: { list: () => lists.answer("ms") } } })); // the two lists the Study table reads; nothing reaches Base44
@@ -59,17 +59,28 @@ test("the first row of each patient has the stronger line, and a repeated patien
   expect(trs).toEqual([[true, false], [false, true], [true, false]]);
 });
 
-test("practice rows: all practice shows them by default, with the banner and the Practice chip; with study rows they are hidden by default", () => {
+const titleLine = (h: string) => text(h.match(/<h2>Study table<\/h2><p class="muted">(.*?)<\/p>/)![1]);
+test("the practice line is the Record view's second title line only: History keeps its own", () => {
+  expect(headLine("record", true)).toBe(PRACTICE_LINE);
+  expect(headLine("record", false)).toBe("Every Record saved on Base44. Numbers only: names and dates stay on your computer.");
+  expect(headLine("history", true)).toBe("Every saved row, newest first. Nothing is ever changed or deleted: a correction or a removal is a new row.");
+});
+
+test("practice rows: all practice shows them by default, with the practice line in the title row and the Practice chip; with study rows they are hidden by default", () => {
   const all: Data = { scans: lab.scans, ms: [m("5", "r0", "N1", { practice: true })], waiting: [] };
   const h = html(all);
-  expect(h).toMatch(/role="switch" aria-checked="true"/);
-  expect(text(h)).toContain("Practice rows These come from public practice scans and are kept apart from the study record.");
-  expect(h).toContain("<b>Practice rows</b>");
+  expect(h).toMatch(/role="switch" aria-checked="true"[^>]*>.*?Practice rows/);
+  expect(titleLine(h)).toBe("Practice rows: these come from public practice scans and are kept apart from the study record."); // the title row's second line, in place of the Record line
+  expect(PRACTICE_LINE).toBe(titleLine(h));
+  expect(h).toContain("<b>Practice rows:</b>");
+  expect(h).not.toContain("st-banner"); // no block above the table: nothing moves when the rows come
+  expect(text(h)).not.toContain("Every Record saved on Base44");
   expect(rows(h)[2].slice(0, 2)).toEqual(["RIDER-1286684383Practice", "N1"]);
   expect(text(h)).not.toContain("hidden");
   const mixed = html(lab);
   expect(mixed).toMatch(/role="switch" aria-checked="false"/);
-  expect(text(mixed)).not.toContain("These come from public practice scans");
+  expect(text(mixed)).not.toContain("these come from public practice scans");
+  expect(titleLine(mixed)).toBe("Every Record saved on Base44. Numbers only: names and dates stay on your computer.");
   expect(text(mixed)).not.toContain("RIDER-1286684383");
   // a waiting practice Record counts as a practice row too: the first Record of a user still shows if its save waits
   const firstWaits = html({ scans: [], ms: [], waiting: [{ key: "k", scan: { study_code: "RIDER-1286684383", timepoint: 0 } as ScanFields, measurement: { ...m("x", "", "N1"), practice: true } }] });
@@ -176,7 +187,8 @@ test("(b) before the lists come: the table's own title row, tools (off) and colu
   const skel = h.match(/<table class="st-table st-skel" aria-hidden="true">.*?<\/table>/)![0];
   expect(rows(skel).slice(0, 2)).toEqual([["Patient", "Nodule", "Baseline", "Follow-up", "Actions"], ["Long mm", "Short mm", "Volume mL", "Method", "Long mm", "Short mm", "Volume mL", "Method"]]); // as the loaded table heads them
   expect(rows(skel).slice(2)).toHaveLength(3);
-  expect(h.match(/<button[^>]*disabled=""[^>]*>(Record|History|Download CSV)<\/button>|role="switch"[^>]*disabled=""/g)).toHaveLength(4); // there, so nothing moves, but off
+  expect(h.match(/<button[^>]*disabled=""[^>]*>(Record|History|All|Approved|Edited|Download CSV)<\/button>|role="switch"[^>]*disabled=""|<input type="search"[^>]*disabled=""/g)).toHaveLength(9); // there, so nothing moves, but off
+  expect(titleLine(h)).toBe("Every Record saved on Base44. Numbers only: names and dates stay on your computer."); // the placeholder state keeps its line
   expect(text(h)).not.toContain("No measurements yet");
 });
 test("(b) preloadStudy: the lists the signed-in page loaded are the tab's first rows, with this browser's Records still waiting (the e2e checks that the tab loads them again)", async () => {
@@ -218,4 +230,62 @@ test("(b) an answer asked before the last preloadStudy never becomes the tab's f
       expect(text(view())).not.toContain("N1");
     }
   } finally { lists.answer = before; }
+});
+
+test("a missing (null) value sorts last both ways, never as 0", () => {
+  const line = (code: string, volume: number | null) => ({ study_code: code, nodule_label: "N1", duplicate: false, practice: false, cells: { 0: { long: 1, short: 1, volume, method: "tool approved", id: code } } }) as never;
+  const lines = [line("a", 2), line("b", null), line("c", 1)];
+  expect(sortLines(lines, { key: "0:volume", desc: false }).map((l: { study_code: string }) => l.study_code)).toEqual(["c", "a", "b"]);
+  expect(sortLines(lines, { key: "0:volume", desc: true }).map((l: { study_code: string }) => l.study_code)).toEqual(["a", "c", "b"]);
+});
+
+test("More details' change: signed, one decimal; a same-day pair (0 days) says so; growth (days > 0) or an unknown day is the plain %; none is —", () => {
+  expect(changeText({ days: 91, pct: 26.7 })).toBe("+26.7%");
+  expect(changeText({ days: 0, pct: 3.3 })).toBe("+3.3% (same day)");
+  expect(changeText({ days: 0, pct: -2 })).toBe("-2.0% (same day)");
+  expect(changeText({ days: 84, pct: -11.9 })).toBe("-11.9%");
+  expect(changeText({ days: 30, pct: 0 })).toBe("0.0%");
+  expect(changeText({ days: undefined, pct: 5 })).toBe("+5.0%");
+  expect(changeText({})).toBe("—");
+});
+
+// Three patients, Baseline and Follow-up: a same-day pair, growth over 91 days, a nodule with no Follow-up
+const mix: Data = {
+  scans: [{ ...sc("a0", "a1b2c3d4", 0), days_from_baseline: 0 }, { ...sc("a1", "a1b2c3d4", 1), days_from_baseline: 0 }, { ...sc("k0", "K7M2P9Q4", 0), days_from_baseline: 0 },
+    { ...sc("k1", "K7M2P9Q4", 1), days_from_baseline: 91 }, { ...sc("x0", "x3f8r1t6", 0), days_from_baseline: 0 }],
+  ms: [m("a0", "a0", "N1", { volume_ml: 0.61 }), m("a1", "a1", "N1", { volume_ml: 0.63 }), m("k0", "k0", "N1", { volume_ml: 1.2 }), m("k1", "k1", "N1", { volume_ml: 1.52, method: "tool edited" }),
+    m("x0", "x0", "N1", { volume_ml: 2.1 }), m("x0b", "x0", "N2", { volume_ml: 0.4 })],
+  waiting: [],
+};
+const ids = (ls: { study_code: string; nodule_label: string }[]) => ls.map((l) => `${l.study_code}/${l.nodule_label}`);
+test("sort: by a column ascending or descending, lines with no value last either way, ties kept in their order", () => {
+  const { lines } = recordLines(mix, false);
+  expect(sortLines(lines)).toBe(lines); // no sort: by patient and nodule, as before
+  expect(ids(sortLines(lines, { key: "0:volume", desc: false }))).toEqual(["x3f8r1t6/N2", "a1b2c3d4/N1", "K7M2P9Q4/N1", "x3f8r1t6/N1"]);
+  expect(ids(sortLines(lines, { key: "0:volume", desc: true }))).toEqual(["x3f8r1t6/N1", "K7M2P9Q4/N1", "a1b2c3d4/N1", "x3f8r1t6/N2"]);
+  expect(ids(sortLines(lines, { key: "1:volume", desc: false }))).toEqual(["a1b2c3d4/N1", "K7M2P9Q4/N1", "x3f8r1t6/N1", "x3f8r1t6/N2"]); // no Follow-up: last, in their order
+  expect(ids(sortLines(lines, { key: "1:volume", desc: true }))).toEqual(["K7M2P9Q4/N1", "a1b2c3d4/N1", "x3f8r1t6/N1", "x3f8r1t6/N2"]); // still last
+  expect(ids(sortLines(lines, { key: "1:change", desc: true }))).toEqual(["K7M2P9Q4/N1", "a1b2c3d4/N1", "x3f8r1t6/N1", "x3f8r1t6/N2"]); // +26.7%, then +3.3%
+  expect(ids(sortLines(lines, { key: "patient", desc: true }))).toEqual(["x3f8r1t6/N1", "x3f8r1t6/N2", "K7M2P9Q4/N1", "a1b2c3d4/N1"]); // a tie keeps its order (stable)
+  expect(ids(sortLines(lines, { key: "0:long", desc: false }))).toEqual(ids(lines)); // all equal: unchanged
+  expect(ids(sortLines(lines, { key: "nodule", desc: true }))).toEqual(["x3f8r1t6/N2", "a1b2c3d4/N1", "K7M2P9Q4/N1", "x3f8r1t6/N1"]);
+});
+test("Search codes: any part of the patient code, any case; the method filter: a line matches when any of its methods is the one chosen", () => {
+  expect(matches("K7M2P9Q4", [], "m2p", "all")).toBe(true);
+  expect(matches("K7M2P9Q4", [], " k7 ", "all")).toBe(true);
+  expect(matches("a1b2c3d4", [], "k7", "all")).toBe(false);
+  expect(matches("a1b2c3d4", ["tool approved"], "", "approved")).toBe(true);
+  expect(matches("a1b2c3d4", ["tool approved"], "", "edited")).toBe(false);
+  expect(matches("K7M2P9Q4", ["tool approved", "tool edited"], "", "edited")).toBe(true); // one Edited cell is enough
+  expect(matches("K7M2P9Q4", ["tool approved", "tool edited"], "", "approved")).toBe(true);
+  expect(matches("K7M2P9Q4", ["manual"], "", "edited")).toBe(true); // shown as Edited
+  expect(matches("K7M2P9Q4", ["tool edited"], "x3", "edited")).toBe(false); // both must match
+});
+test("the Record view's headers sort: a button in each th (Patient, Nodule, each timepoint's Long, Short and Volume), none sorted at first", () => {
+  const h = html(mix);
+  const sorts = [...h.matchAll(/<th[^>]*><button class="st-sort"[^>]*>(.*?)<\/button><\/th>/g)].map(([, b]) => text(b));
+  expect(sorts).toEqual(["Patient", "Nodule", "Long mm", "Short mm", "Volume mL", "Long mm", "Short mm", "Volume mL"]);
+  expect(h).not.toContain("aria-sort");
+  expect(h).toMatch(/role="switch" aria-checked="false"[^>]*>.*?More details/); // More details: off by default, the default view as before
+  expect(rows(h)[1]).toEqual(["Long mm", "Short mm", "Volume mL", "Method", "Long mm", "Short mm", "Volume mL", "Method"]);
 });

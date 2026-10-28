@@ -6,10 +6,12 @@ test.skip(!existsSync("public/demo/index.json"), "demo files not generated: run 
 
 test("demo: medium case replays the first click and its 2 corrections with no engine request", async ({ page }) => {
   const toEngine: string[] = [];
-  await page.route("https://practice.example/**", (r) => r.abort()); // the Measure tab asks the build's stand-in practice server: not a Demo request, and no DNS lookup
+  // The Measure tab asks the build's stand-in practice server (not a Demo request, and no DNS lookup): it is paused, so the choice card offers the Demo
+  await page.route("https://practice.example/**", (r) => r.fulfill({ status: 503, headers: { "access-control-allow-origin": new URL(page.url()).origin }, contentType: "text/plain", body: "The space is paused" }));
   page.on("request", (r) => { if (/localhost:(?!4173)\d+|\/api\//.test(r.url()) && !r.url().startsWith("https://practice.example/")) toEngine.push(r.url()); });
   await page.goto("/");
-  await page.getByRole("tab", { name: "Demo" }).click();
+  await expect(page.getByRole("tab", { name: "Demo" })).toHaveCount(0); // the Demo has no tab: a person reaches it from the choice card
+  await page.getByRole("region", { name: "Engine" }).getByRole("button", { name: "Open the Demo" }).click();
   await expect(page.getByText("Demo: recorded results on development cases, not a live model.")).toBeVisible();
   await page.getByLabel("Case").selectOption({ label: "medium (RIDER-1286684383_test)" });
   const marks = page.getByLabel("Axis lines and click marks");

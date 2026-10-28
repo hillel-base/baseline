@@ -45,15 +45,44 @@ phase_prerequisites() {
     skipped=false; echo "Installing uv (Astral's installer)..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
   fi
-  if [ ! -f "$ROOT/web/dist/index.html" ]; then
+  if page_stale; then
     skipped=false
     if node_ok; then
-      (cd "$ROOT/web" && npm ci && npm run build)  # npm_config_registry, if set, is passed through
+      build_page
     else
       download_page
     fi
   fi
   log_phase prerequisites $skipped "$PAGE_BYTES" "$t0" "$s0"
+}
+
+# The local page carries the version it was built or downloaded for (web/dist/.page-version), so an update to a new
+# version builds or downloads it again; a page with no stamp (an install before 0.1.3) counts as old.
+page_stale() {
+  [ -f "$ROOT/web/dist/index.html" ] || return 0
+  [ -f "$ROOT/VERSION" ] || return 1
+  [ "$(cat "$ROOT/web/dist/.page-version" 2>/dev/null)" != "$(cat "$ROOT/VERSION")" ]
+}
+stamp_page() {
+  if [ -f "$ROOT/VERSION" ] && [ -d "$ROOT/web/dist" ]; then cp "$ROOT/VERSION" "$ROOT/web/dist/.page-version"; fi
+}
+
+# With Node: the page is built here. A page already here (an update) is set aside first, so a failed build (npm down for a
+# while) keeps it and the tool still starts; on a first install a failed build stops setup, as before.
+build_page() {
+  local old="$ROOT/web/dist.old"
+  rm -rf "$old"
+  if [ -f "$ROOT/web/dist/index.html" ]; then mv "$ROOT/web/dist" "$old"; fi
+  if (cd "$ROOT/web" && npm ci && npm run build); then  # npm_config_registry, if set, is passed through
+    stamp_page
+    rm -rf "$old"
+  elif [ -d "$old" ]; then
+    rm -rf "$ROOT/web/dist"; mv "$old" "$ROOT/web/dist"
+    echo "Could not rebuild the local page; the old one stays. Run the same command again later."
+  else
+    echo "Could not build the local page (the error is above). Run ./lung.sh setup again." >&2
+    exit 1
+  fi
 }
 
 # Without Node: the built page from the release of this version. A failed download is not fatal: the hosted page still works.
@@ -65,9 +94,21 @@ download_page() {
   if curl -fsSL "$url" -o "$tmp/page.zip" \
     && { unzip -q "$tmp/page.zip" -d "$tmp/x" 2>/dev/null || uv run --no-project python -I -m zipfile -e "$tmp/page.zip" "$tmp/x"; } \
     && [ -f "$tmp/x/dist/index.html" ]; then
-    rm -rf "$ROOT/web/dist" && mv "$tmp/x/dist" "$ROOT/web/dist"
-    PAGE_BYTES=$(wc -c < "$tmp/page.zip" | tr -d ' ')
-    echo "Local page: downloaded (commit $(cat "$tmp/x/COMMIT" 2>/dev/null || echo unknown))."
+    local old="$ROOT/web/dist.old"  # the old page is set aside, not deleted, until the new one is in place
+    rm -rf "$old"
+    if [ -d "$ROOT/web/dist" ]; then mv "$ROOT/web/dist" "$old"; fi
+    if mv "$tmp/x/dist" "$ROOT/web/dist"; then
+      rm -rf "$old"
+      stamp_page
+      PAGE_BYTES=$(wc -c < "$tmp/page.zip" | tr -d ' ')
+      echo "Local page: downloaded (commit $(cat "$tmp/x/COMMIT" 2>/dev/null || echo unknown))."
+    else
+      rm -rf "$ROOT/web/dist"
+      if [ -d "$old" ]; then mv "$old" "$ROOT/web/dist"; fi
+      echo "Could not put the downloaded page in place, so the old one stays. Run ./lung.sh setup again later."
+    fi
+  elif [ -f "$ROOT/web/dist/index.html" ]; then
+    echo "Could not download the new local page, so the old one stays. The hosted page works without it. Run ./lung.sh setup again later, or install Node 22.12 or newer from https://nodejs.org (or: brew install node)."
   else
     echo "Could not download the local page, so http://localhost:$PORT shows no page. The hosted page works without it. Run ./lung.sh setup again later, or install Node 22.12 or newer from https://nodejs.org (or: brew install node)."
   fi

@@ -52,14 +52,49 @@ function Phase-Prerequisites {
         $env:Path = "$HOME\.local\bin;$env:Path"
     }
     $pageBytes = 0
-    if (-not (Test-Path (Join-Path $Root "web\dist\index.html"))) {
+    if (Page-Stale) {
         $skipped = $false
-        if (Node-Ok) {
-            Push-Location (Join-Path $Root "web")
-            try { Run npm.cmd ci; Run npm.cmd run build } finally { Pop-Location }  # npm_config_registry, if set, is passed through
-        } else { $pageBytes = Get-Page }
+        if (Node-Ok) { Build-Page } else { $pageBytes = Get-Page }
     }
     Log-Phase prerequisites $skipped $pageBytes $t0
+}
+
+# The local page carries the version it was built or downloaded for (web\dist\.page-version), so an update to a new
+# version builds or downloads it again; a page with no stamp (an install before 0.1.3) counts as old.
+function Page-Stale {
+    if (-not (Test-Path (Join-Path $Root "web\dist\index.html"))) { return $true }
+    $version = Join-Path $Root "VERSION"
+    if (-not (Test-Path $version)) { return $false }
+    $want = Get-Content $version -Raw
+    if ([string]::IsNullOrWhiteSpace($want)) { return $false }
+    $stamp = Join-Path $Root "web\dist\.page-version"
+    $have = if (Test-Path $stamp) { Get-Content $stamp -Raw } else { $null }
+    if ([string]::IsNullOrWhiteSpace($have)) { return $true }  # no stamp, or an empty one: an install before 0.1.3
+    return ($have.Trim() -ne $want.Trim())
+}
+function Stamp-Page {
+    $version = Join-Path $Root "VERSION"; $dist = Join-Path $Root "web\dist"
+    if ((Test-Path $version) -and (Test-Path $dist)) { Copy-Item $version (Join-Path $dist ".page-version") -Force }
+}
+
+# With Node: the page is built here. A page already here (an update) is set aside first, so a failed build (npm down for a
+# while) keeps it and the tool still starts; on a first install a failed build stops setup, as before.
+function Build-Page {
+    $web = Join-Path $Root "web"; $dist = Join-Path $web "dist"; $old = Join-Path $web "dist.old"
+    if (Test-Path $old) { Remove-Item $old -Recurse -Force }
+    $had = Test-Path (Join-Path $dist "index.html")
+    if ($had) { Move-Item $dist $old }  # the same folder: a rename
+    $err = $null
+    Push-Location $web
+    try { Run npm.cmd ci; Run npm.cmd run build } catch { $err = $_.Exception.Message } finally { Pop-Location }  # npm_config_registry, if set, is passed through
+    if (-not $err) {
+        Stamp-Page
+        if (Test-Path $old) { Remove-Item $old -Recurse -Force }
+    } elseif ($had) {
+        if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
+        Move-Item $old $dist
+        Write-Host "Could not rebuild the local page ($err); the old one stays. Run the same command again later."
+    } else { throw "Could not build the local page: $err" }
 }
 
 # Without Node: the built page from the release of this version. A failed download is not fatal: the hosted page still works.
@@ -74,13 +109,25 @@ function Get-Page {
         Invoke-WebRequest $url -OutFile (Join-Path $tmp "page.zip") -UseBasicParsing
         Expand-Archive (Join-Path $tmp "page.zip") (Join-Path $tmp "x") -Force
         if (-not (Test-Path (Join-Path $tmp "x\dist\index.html"))) { throw "the file holds no page" }
-        $dist = Join-Path $Root "web\dist"
-        if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
-        Move-Item (Join-Path $tmp "x\dist") $dist
+        $dist = Join-Path $Root "web\dist"; $old = Join-Path $Root "web\dist.old"
+        if (Test-Path $old) { Remove-Item $old -Recurse -Force }
+        if (Test-Path $dist) { Move-Item $dist $old }  # the old page is set aside, not deleted, until the new one is in place
+        try { Copy-Item (Join-Path $tmp "x\dist") $dist -Recurse }  # a copy: TEMP can be on another drive, where Move-Item fails
+        catch {
+            if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
+            if (Test-Path $old) { Move-Item $old $dist }
+            throw
+        }
+        if (Test-Path $old) { Remove-Item $old -Recurse -Force }
+        Stamp-Page
         Write-Host "Local page: downloaded."
         return (Get-Item (Join-Path $tmp "page.zip")).Length
     } catch {
-        Write-Host "Could not download the local page ($($_.Exception.Message)), so http://localhost:$Port shows no page. The hosted page works without it. Run .\lung.ps1 setup again later, or install Node 22.12 or newer from https://nodejs.org (or: winget install OpenJS.NodeJS)."
+        if (Test-Path (Join-Path $Root "web\dist\index.html")) {
+            Write-Host "Could not download the new local page ($($_.Exception.Message)), so the old one stays. The hosted page works without it. Run .\lung.ps1 setup again later, or install Node 22.12 or newer from https://nodejs.org (or: winget install OpenJS.NodeJS)."
+        } else {
+            Write-Host "Could not download the local page ($($_.Exception.Message)), so http://localhost:$Port shows no page. The hosted page works without it. Run .\lung.ps1 setup again later, or install Node 22.12 or newer from https://nodejs.org (or: winget install OpenJS.NodeJS)."
+        }
         return 0
     } finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

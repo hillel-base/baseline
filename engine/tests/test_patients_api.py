@@ -112,6 +112,17 @@ def test_a_folder_outside_the_browse_root_is_refused(root, runs_dir, dicom_serie
     assert c.get("/api/patients").json()["folder"] == {"path": None, "from": None, "error": None}
 
 
+def test_a_practice_server_numbers_the_tutorial_case_first(server_env, clock, dicom_series, runs_dir, monkeypatch):
+    """The tutorial's case (app.TUTORIAL) is Practice patient 1 on a practice server, so the tour starts at the top of the list; the rest keep their order."""
+    from lung_engine.app import TUTORIAL
+    before = "RIDER-1000000000"  # sorts before the tutorial's id, as 18 of the 28 public patients do
+    monkeypatch.setenv("LUNG_PRACTICE_PATIENTS", f"RIDER-TEST01,{before},{TUTORIAL}")
+    _second(dicom_series, before)
+    _second(dicom_series, TUTORIAL)
+    j = server_make(dicom_series, runs_dir).get("/api/patients", headers={"Origin": ORIGIN, **A}).json()
+    assert [(p["name"], p["key"]) for p in j["patients"]] == [("Practice patient 1", TUTORIAL), ("Practice patient 2", before), ("Practice patient 3", "RIDER-TEST01")]
+
+
 def test_server_mode_lists_practice_patients_only(server_env, clock, dicom_series, runs_dir, monkeypatch):
     monkeypatch.setenv("LUNG_PRACTICE_PATIENTS", "RIDER-TEST01,RIDER-TEST00")
     _second(dicom_series, "RIDER-TEST00")
@@ -174,6 +185,7 @@ def test_a_study_scan_carries_its_patient_day_and_timepoint_in_scan_info(root, r
     stored = json.loads((runs_dir / "study_scans.json").read_text())
     beta = by_name(c.get("/api/patients").json())["Test, Beta"]["scans"][0]
     assert stored[beta["id"]] == {"patient": "P2", "day": None, "timepoint": 0}  # Undated, and the patient's only scan: timepoint 0
+    assert c.get(f"/api/scans/{beta['id']}", headers=HOSTED).json()["days_from_baseline"] is None  # undated: no day, never 0 (0 reads as "the same day")
     assert c.get("/api/scans/RIDER-TEST01_test").json()["timepoint"] is None  # a data-folder scan: the page's own test/retest rule
 
 

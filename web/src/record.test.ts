@@ -219,3 +219,8 @@ test("a coded scan keeps its opened id for Find and the row events; a local row 
   const folder = { patient: "F-0a1b2c3d", series: "folder", outline_file: "f3" } as RecordedNodule; // an opened folder: the id is the patient alone (scans.py FOLDER_ID)
   expect(scanIdOf(folder)).toBe("F-0a1b2c3d");
 });
+
+test("a CSV cell that a spreadsheet would run as a formula (= + - @ and not a number) gets a leading quote mark; numbers, negative ones too, stay numbers", () => {
+  const csv = toCSV([{ a: "=HYPERLINK(\"x\")", b: "-11.9", c: "@SUM(1)", d: "+3", e: "P-3K9Q" }], ["a", "b", "c", "d", "e"]);
+  expect(csv.split("\n")[1]).toBe(`"'=HYPERLINK(""x"")",-11.9,'@SUM(1),+3,P-3K9Q`);
+});

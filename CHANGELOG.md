@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.3 (2026-10-28)
+
+An update refreshes the local page, a richer Study table, and the tutorial starts at Practice patient 1. Research use only.
+
+**Install and start**
+- Running the install command again after a new version now builds the local page again (or downloads it, without Node). Before, an update kept the old page, so the Patients panel in the hosted page's frame could show an older Change folder…. An install from before this version refreshes its page once. If the rebuild or the download fails, the old page stays and the tool starts.
+
+**Study table**
+- A **More details** switch adds each scan's series number and slice thickness, the days between scans, and each nodule's volume change from the previous scan. On scans from the same day the change is labelled "(same day)": it is the repeat difference, not growth.
+- The headers sort the table. **Search codes** finds a patient code, and a filter shows Approved or Edited rows only.
+- Download CSV adds two columns at the end: `days_between` and `volume_change_pct`. The other columns keep their names and order.
+- The practice-rows notice is the title's second line, so the table no longer moves down when the rows arrive.
+
+**Tutorial and the hosted page**
+- The tutorial's highlight ring sits an even 4 px round its target, with the target's own corner shape.
+- The Demo has no tab in the top bar. The choice card offers it while no practice server is ready, and so does the message when a server stops answering.
+- On a practice server, the tutorial's case is Practice patient 1.
+
 ## 0.1.2 (2026-10-28)
 
 The nodule finder on by default, eight practice patients, a cleaner wait and folder choice, and Snap to tissue keeps ground glass. Research use only.

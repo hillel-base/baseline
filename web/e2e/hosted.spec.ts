@@ -42,14 +42,15 @@ const PRACTICE = "https://practice.example";
 const NO_ENGINE = "No engine found on this computer. Start it (see Run it on your computer), then try again."; // the hosted page's own text
 test.beforeEach(({ page }) => page.route(/^https:\/\/practice(-2)?\.example\//, (r) => r.abort()));
 
-test("hosted: signed in, three tabs, no localhost call before the button, then live and a click outlines", async ({ page }) => {
+test("hosted: signed in, two tabs (the Demo has none), no localhost call before the button, then live and a click outlines", async ({ page }) => {
   test.setTimeout(240_000);
   const toEngine: string[] = [];
   page.on("request", (r) => { if (r.url().includes(`localhost:${PORT}`)) toEngine.push(r.url()); });
 
   await page.goto("/");
   await expect(page.getByText("Signed in as test-user")).toBeVisible();
-  for (const t of ["Measure", "Study table", "Demo"]) await expect(page.getByRole("tab", { name: t })).toBeVisible();
+  for (const t of ["Measure", "Study table"]) await expect(page.getByRole("tab", { name: t })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Demo" })).toHaveCount(0); // the Demo opens only from the choice card, when no server is ready
   await expect(page.getByRole("banner").getByRole("img", { name: "Baseline, lung nodule measurement on CT" })).toBeVisible(); // the logo, not a text title
   await expect(page).toHaveTitle("Baseline");
   await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", /favicon.*\.svg$/);
@@ -57,10 +58,6 @@ test("hosted: signed in, three tabs, no localhost call before the button, then l
   await expect(page.locator("footer").getByText("Research use only. Not a medical device.")).toBeVisible();
   await page.waitForTimeout(1500);
   expect(toEngine).toEqual([]); // (b) nothing before the click
-
-  await page.getByRole("tab", { name: "Demo" }).click();
-  await expect(page.getByText("Demo: recorded results on development cases, not a live model.")).toBeVisible();
-  await page.getByRole("tab", { name: "Measure" }).click();
 
   const panel = await outline(page);
   expect(await panel.textContent()).toMatch(/Long axis \d+\.\d mm/); // label and value sit on two lines: read the text, not the layout
@@ -152,7 +149,7 @@ test("hosted: signed in but not invited, the one sign-in bounce then shows the i
 // (the fake client's own lung.fake.* keys aside).
 const ours = (page: Page) => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("lung.") && !k.startsWith("lung.fake")));
 const LEFT = "1 row is still waiting to be saved. It is saved when you sign in again on this computer.";
-const BANNER = "These come from public practice scans and are kept apart from the study record.";
+const BANNER = "Practice rows: these come from public practice scans and are kept apart from the study record."; // the title row's second line while every row is a practice row
 const practiceSwitch = (page: Page) => page.getByRole("switch", { name: "Practice rows" });
 const RIDER_N1 = /RIDER-1286684383.*N1/;
 const NOT_SAVED = "Recorded on this computer. Not saved to the study table yet; trying again every 15 s.";
@@ -516,6 +513,133 @@ test("hosted Study table: with no rows, the empty state's Go to Measure opens th
   await expect(page.getByRole("heading", { name: "Choose where the tool runs" })).toBeVisible(); // this build lists a practice server
 });
 
+// Seeded rows only (DEMO_ONLY=1 runs these): three patients with a Baseline and a Follow-up each, a same-day pair (a1b2c3d4), growth over 91 days
+// (k7m2p9q4, its Follow-up Edited), a shrink over 84 days (x3f8r1t6), and a nodule with a Baseline only (a1b2c3d4 N2).
+const MIX = {
+  Scan: [["a1b2c3d4", 0, 0, 3, 1.25], ["a1b2c3d4", 1, 0, 5, 1.25], ["k7m2p9q4", 0, 0, 2, 2.5], ["k7m2p9q4", 1, 91, 4, 2.5], ["x3f8r1t6", 0, 0, 3, 1.25], ["x3f8r1t6", 1, 84, 3, 1.25]]
+    .map(([study_code, timepoint, days_from_baseline, series_number, slice_thickness_mm], i) => ({ id: `Scan${i + 1}`, study_code, timepoint, days_from_baseline, series_number, slice_thickness_mm, slice_spacing_mm: slice_thickness_mm, scan_ref: `mix${i + 1}` })),
+  NoduleMeasurement: ([[1, "N1", 12.3, 8.1, 0.61], [2, "N1", 12.6, 8.3, 0.63], [1, "N2", 6.2, 4.9, 0.09], [3, "N1", 15.4, 11.2, 1.2], [4, "N1", 16.9, 12.0, 1.52, "tool edited"], [5, "N1", 18.8, 13.5, 2.1], [6, "N1", 18.1, 13.0, 1.85]] as const)
+    .map(([scan, nodule_label, long_axis_mm, short_axis_mm, volume_ml, method = "tool approved"], i) => ({ id: `M${i + 1}`, scan_id: `Scan${scan}`, nodule_label, long_axis_mm, short_axis_mm, volume_ml, method,
+      approved_at: `2026-10-27T09:0${i}:00.000Z`, practice: false })),
+};
+const seedMix = (page: Page) => page.addInitScript((store) => { if (!localStorage.getItem("lung.fake.store")) localStorage.setItem("lung.fake.store", JSON.stringify(store)); }, MIX);
+const recordRows = (page: Page) => page.getByRole("table", { name: "Study record" }).locator("tbody tr");
+const order = async (page: Page) => (await recordRows(page).evaluateAll((trs) => trs.map((tr) => [...tr.querySelectorAll("td")].slice(0, 2).map((td) => td.textContent).join(" "))));
+
+test("hosted Study table: More details adds each scan's series and slice thickness, and after the Baseline the days between and the volume change, a same-day pair labelled; off, they go", async ({ page }) => {
+  await seedMix(page);
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Study table" }).click();
+  const details = page.getByRole("switch", { name: "More details" }), head = (name: string) => page.getByRole("columnheader", { name, exact: true });
+  await expect(details).toHaveAttribute("aria-checked", "false");
+  await expect(page.getByRole("row", { name: /a1b2c3d4 N1/ })).toHaveText(/^a1b2c3d4\s*N1\s*12\.3\s*8\.1\s*0\.61\s*Approved\s*12\.6\s*8\.3\s*0\.63\s*Approved\s*⋯$/); // the default view as before
+  for (const h of ["Series", "Slice mm", "Days between", "Change"]) await expect(head(h)).toHaveCount(0);
+  await details.click();
+  await expect(details).toHaveAttribute("aria-checked", "true");
+  await expect(head("Series")).toHaveCount(2); // each timepoint
+  await expect(head("Slice mm")).toHaveCount(2);
+  await expect(head("Days between")).toHaveCount(1); // after the first only
+  await expect(head("Change")).toHaveCount(1);
+  await expect(page.getByRole("row", { name: /a1b2c3d4 N1/ })).toHaveText(/^a1b2c3d4\s*N1\s*12\.3\s*8\.1\s*0\.61\s*Approved\s*3\s*1\.25\s*12\.6\s*8\.3\s*0\.63\s*Approved\s*5\s*1\.25\s*0\s*\+3\.3% \(same day\)\s*⋯$/);
+  await expect(page.getByRole("row", { name: /k7m2p9q4 N1/ })).toHaveText(/Edited\s*4\s*2\.5\s*91\s*\+26\.7%\s*⋯$/); // growth: the plain %
+  await expect(page.getByRole("row", { name: /x3f8r1t6 N1/ })).toHaveText(/84\s*-11\.9%\s*⋯$/);
+  await expect(page.getByRole("row", { name: /a1b2c3d4 N2/ })).toHaveText(/Approved\s*3\s*1\.25(\s*—){8}\s*⋯$/); // no Follow-up: — throughout
+  await details.click();
+  await expect(details).toHaveAttribute("aria-checked", "false");
+  for (const h of ["Series", "Slice mm", "Days between", "Change"]) await expect(head(h)).toHaveCount(0);
+});
+
+test("hosted Study table: a header sorts the Record view (aria-sort), a click toggles ascending and descending, lines with no value last; Tab, Enter and Space work", async ({ page }) => {
+  await seedMix(page);
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Study table" }).click();
+  expect(await order(page)).toEqual(["a1b2c3d4 N1", "a1b2c3d4 N2", "k7m2p9q4 N1", "x3f8r1t6 N1"]); // by patient and nodule, as before
+  const followUpVolume = page.getByRole("columnheader", { name: "Volume mL" }).nth(1);
+  await expect(followUpVolume).not.toHaveAttribute("aria-sort");
+  await followUpVolume.getByRole("button").click();
+  await expect(followUpVolume).toHaveAttribute("aria-sort", "ascending");
+  expect(await order(page)).toEqual(["a1b2c3d4 N1", "k7m2p9q4 N1", "x3f8r1t6 N1", "a1b2c3d4 N2"]); // 0.63, 1.52, 1.85, then no Follow-up
+  await followUpVolume.getByRole("button").click();
+  await expect(followUpVolume).toHaveAttribute("aria-sort", "descending");
+  expect(await order(page)).toEqual(["x3f8r1t6 N1", "k7m2p9q4 N1", "a1b2c3d4 N1", "a1b2c3d4 N2"]); // still last
+  await page.getByRole("switch", { name: "More details" }).click();
+  const change = page.getByRole("columnheader", { name: "Change" });
+  await change.getByRole("button").click();
+  await expect(change).toHaveAttribute("aria-sort", "ascending");
+  await expect(followUpVolume).not.toHaveAttribute("aria-sort"); // one sorted column at a time
+  expect(await order(page)).toEqual(["x3f8r1t6 N1", "a1b2c3d4 N1", "k7m2p9q4 N1", "a1b2c3d4 N2"]); // -11.9%, +3.3%, +26.7%
+  await page.getByRole("button", { name: "Download CSV" }).focus();
+  await page.keyboard.press("Tab"); // the first header after the tools
+  const patient = page.getByRole("columnheader", { name: "Patient" });
+  await expect(patient.getByRole("button")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(patient).toHaveAttribute("aria-sort", "ascending");
+  await page.keyboard.press("Space");
+  await expect(patient).toHaveAttribute("aria-sort", "descending");
+  expect(await order(page)).toEqual(["x3f8r1t6 N1", "k7m2p9q4 N1", "a1b2c3d4 N1", "a1b2c3d4 N2"]); // a tie keeps its order
+});
+
+test("hosted Study table: Search codes and the method filter narrow the Record and the History views", async ({ page }) => {
+  await seedMix(page);
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Study table" }).click();
+  const search = page.getByRole("searchbox", { name: "Search codes" }), method = page.getByRole("group", { name: "Method" });
+  await search.fill("K7M");
+  expect(await order(page)).toEqual(["k7m2p9q4 N1"]);
+  await expect(page.getByText(/^1 nodule on 1 patient · "Edited" means/)).toBeVisible();
+  await page.getByRole("button", { name: "History" }).click();
+  const hist = page.getByRole("table", { name: "History" });
+  await expect(hist.locator("tbody tr")).toHaveCount(2);
+  await expect(hist.getByRole("row", { name: /a1b2c3d4|x3f8r1t6/ })).toHaveCount(0);
+  await search.fill("");
+  await method.getByRole("button", { name: "Edited" }).click();
+  await expect(method.getByRole("button", { name: "Edited" })).toHaveAttribute("aria-pressed", "true");
+  await expect(hist.locator("tbody tr")).toHaveCount(1); // the one Edited row
+  await expect(hist.locator("tbody tr")).toContainText(/k7m2p9q4\s*N1\s*Follow-up/);
+  await page.getByRole("button", { name: "Record" }).click();
+  expect(await order(page)).toEqual(["k7m2p9q4 N1"]); // a line with an Edited cell
+  await method.getByRole("button", { name: "Approved" }).click();
+  expect(await order(page)).toEqual(["a1b2c3d4 N1", "a1b2c3d4 N2", "k7m2p9q4 N1", "x3f8r1t6 N1"]); // k7m2p9q4's Baseline is Approved
+  await search.fill("zzz");
+  await expect(recordRows(page)).toHaveText(["No lines match this search and filter."]);
+  await search.fill("x3");
+  await method.getByRole("button", { name: "All" }).click();
+  expect(await order(page)).toEqual(["x3f8r1t6 N1"]);
+});
+
+test("hosted Study table: the CSV ends with days_between and volume_change_pct", async ({ page }) => {
+  await seedMix(page);
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Study table" }).click();
+  const [file] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download CSV" }).click()]);
+  expect(file.suggestedFilename()).toBe("study-table.csv");
+  const [head, ...lines] = readFileSync(await file.path(), "utf8").trim().split("\n");
+  expect(head).toMatch(/,method,replaced,removed,days_between,volume_change_pct$/);
+  expect(lines.filter((l) => /^a1b2c3d4,1,/.test(l))).toEqual([expect.stringMatching(/,0,3\.3$/)]); // same day: 0 days and the change, no label
+  expect(lines.filter((l) => /^k7m2p9q4,1,/.test(l))).toEqual([expect.stringMatching(/,91,26\.7$/)]);
+  expect(lines.filter((l) => /^\w+,0,/.test(l)).every((l) => l.endsWith(",,"))).toBe(true); // the first timepoint: empty
+});
+
+test("hosted Study table: with only practice rows on a slow Base44, the practice line takes the title row's second line, so the table does not move when the rows come", async ({ page }) => {
+  await page.addInitScript(() => { if (!localStorage.getItem("lung.fake.store")) localStorage.setItem("lung.fake.store", JSON.stringify({
+    Scan: [{ id: "Scan1", study_code: "RIDER-1286684383", timepoint: 0, days_from_baseline: 0, scan_ref: "rider0" }, { id: "Scan2", study_code: "RIDER-1286684383", timepoint: 1, days_from_baseline: 0, scan_ref: "rider1" }],
+    NoduleMeasurement: [{ id: "M1", scan_id: "Scan1", nodule_label: "N1", long_axis_mm: 22.1, short_axis_mm: 12.4, volume_ml: 6.9, method: "tool approved", approved_at: "2026-10-27T09:00:00.000Z", practice: true },
+      { id: "M2", scan_id: "Scan2", nodule_label: "N1", long_axis_mm: 22.4, short_axis_mm: 12.6, volume_ml: 7.1, method: "tool edited", approved_at: "2026-10-27T09:05:00.000Z", practice: true }],
+  })); localStorage.setItem("lung.fake.listDelay", "2000"); });
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Study table" }).click();
+  const st = page.getByRole("region", { name: "Study table" }), line = st.locator(".st-head p");
+  await expect(st.locator(".st-skel tbody tr")).toHaveCount(3);
+  await expect(line).toHaveText("Every Record saved on Base44. Numbers only: names and dates stay on your computer."); // the placeholder state keeps its line
+  const top = (l: import("@playwright/test").Locator) => l.evaluate((e) => Math.round(e.getBoundingClientRect().y));
+  const before = { table: await top(st.locator(".st-skel")), line: await rect(line) };
+  await expect(page.getByRole("row", { name: RIDER_N1 })).toBeVisible({ timeout: 10_000 });
+  await expect(line).toHaveText(BANNER);
+  await expect(practiceSwitch(page)).toHaveAttribute("aria-checked", "true");
+  expect(await top(st.getByRole("table", { name: "Study record" }))).toBe(before.table); // nothing moved
+  expect((await rect(line))[3]).toBe(before.line[3]); // the same one line
+});
+
 // The practice server. The hosted e2e build lists the stand-in origin PRACTICE (top of this file); page.route answers for it.
 const INFO = (busy: boolean, signedIn: boolean) => signedIn // the engine's open answer is minimal; a signed-in caller gets it all
   ? { commit: "fake123", model: "fake", width_method: "edge to edge", device: "cuda", server: { busy, idle_min: 10 } }
@@ -653,7 +777,7 @@ test("install: How to install it and the footer link open Run it on your compute
   await link.click();
   const view = page.getByRole("region", { name: "Run it on your computer" });
   await expect(view.getByRole("heading", { name: "Run it on your computer" })).toBeVisible();
-  await expect(page.getByRole("tab")).toHaveCount(3); // a view, not a fourth tab
+  await expect(page.getByRole("tab")).toHaveCount(2); // a view, not a third tab
   await expect(page.getByRole("tab", { selected: true })).toHaveCount(0);
   expect(context.pages()).toHaveLength(1);
   expect(await view.innerHTML()).not.toContain("github.com"); // the commands name raw.githubusercontent.com as text, never a link
@@ -699,8 +823,15 @@ test("practice: paused says the next step and offers the Demo as the main button
   expect(seen.every((s) => s.auth === undefined)).toBe(true);
   await shot(page, "paused");
   await card(page).getByRole("button", { name: "Open the Demo" }).click();
-  await expect(page.getByRole("tab", { name: "Demo" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText(TEXT.demo)).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Measure" })).toHaveAttribute("aria-selected", "false"); // the Demo has no tab of its own
+  await page.getByRole("button", { name: "Back to Measure" }).click();
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible();
+  await card(page).getByRole("button", { name: "Open the Demo" }).click();
+  await page.getByRole("tab", { name: "Measure" }).click(); // the Measure tab also takes you back
+  await expect(page.getByRole("tab", { name: "Measure" })).toHaveAttribute("aria-selected", "true");
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible();
+  await expect(page.getByText(TEXT.demo)).toHaveCount(0);
 });
 
 // v0.1.1, automatic sleep: a forgotten tab must not keep the practice servers awake. Playwright's clock lets 15 minutes pass at once.
@@ -770,6 +901,15 @@ test("practice: starting, then unreachable, then ready still connects by itself,
   await page.waitForTimeout(11_000);
   phase = "ready";
   await expect(page.getByRole("status").filter({ hasText: LIVE_LINE })).toBeVisible({ timeout: 15_000 });
+});
+
+test("practice: an unreachable practice server still offers the Demo on the card, in every browser (no Demo tab), and the Demo has a way back", async ({ page }) => {
+  await practice(page, () => "abort"); // a network error on every probe: unavailable
+  await page.goto("/");
+  await expect(card(page).getByText("The practice server is starting or cannot be reached. We will try again.")).toBeVisible({ timeout: 15_000 });
+  await card(page).getByRole("button", { name: "Open the Demo" }).click();
+  await page.getByRole("button", { name: "Back to Measure" }).click();
+  await expect(card(page)).toBeVisible();
 });
 
 test("practice: a visitor who chose the local engine while the server started is offered it, never moved to it", async ({ page }) => {
@@ -868,6 +1008,7 @@ for (const [how, answer] of [["a lost answer", "abort"], ["a 502", { status: 502
     await expect(page.getByRole("status").filter({ hasText: LIVE_LINE })).toHaveCount(0);
     await expect(page.getByText(/Engine not running|Bad gateway/)).toHaveCount(0);
     if (how === "a lost answer") await shot(page, "stopped");
+    await expect(viewer.getByRole("button", { name: "Open the Demo" })).toBeVisible(); // with no Demo tab, the way to it while the server is down
     down = false;
     await viewer.getByRole("button", { name: "Try again" }).click();
     await expect(page.getByRole("status").filter({ hasText: LIVE_LINE })).toHaveClass(/ok/);

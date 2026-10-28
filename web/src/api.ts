@@ -1,7 +1,7 @@
 export type ScanRow = { id: string; patient: string; series: string };
 export type ScanMeta = ScanRow & {
   study_code: string; // the public RIDER name, else a random code from the engine
-  days_from_baseline: number; // whole days from the patient's earliest test/retest date
+  days_from_baseline: number | null; // whole days from the patient's earliest test/retest date; null when a date is missing (never 0: that reads as the same day)
   scan_ref: string; // random per scan, made by the engine: the only scan name Base44 gets
   shape: [number, number, number];
   spacing: [number, number, number];

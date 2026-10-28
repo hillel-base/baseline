@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Tutorial mode on the hosted build (the hosted project's build and engine): the whole tour with the local engine and the model, one picture per step,
@@ -14,12 +14,30 @@ const coachOf = (page: Page) => page.getByRole("region", { name: "Tutorial" });
 const imageReady = (page: Page) => expect(page.getByText(/^Loading (image|slice index) \d+…$/)).toHaveCount(0, { timeout: 30_000 });
 /** A person's browser: the e2e browser says navigator.webdriver, and the page never offers the tutorial to an automated browser. */
 const asPerson = (page: Page) => page.addInitScript(() => Object.defineProperty(Navigator.prototype, "webdriver", { get: () => false }));
-let shots = 0;
-async function shot(page: Page, name: string) {
-  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))); // the box moves on the next frame
-  mkdirSync(DIR, { recursive: true });
-  await page.screenshot({ path: `${DIR}/${String(++shots).padStart(2, "0")}-${name}.png` });
+const G = 4; // Coach.tsx: the ring's gap round its target
+const gaps: Record<string, { gaps: number[]; at: number[] }> = {}; // per picture: left, top, right and bottom gaps and the radius over the target's; the target's box
+/** The ring hugs the element the coach marked as its target: a gap of G on all four sides, and the target's corner radius plus G. */
+async function ringHugs(page: Page, name: string) {
+  const measure = () => page.evaluate(() => {
+    const ring = document.querySelector(".tut-ring")!, t = document.querySelector("[data-tut-anchor]");
+    if (getComputedStyle(ring).display === "none") return t ? "a mark with no ring" : null;
+    if (!t) return "a ring with no mark";
+    const [r, a] = [ring.getBoundingClientRect(), t.getBoundingClientRect()], px = (e: Element) => parseFloat(getComputedStyle(e).borderTopLeftRadius) || 0;
+    return { gaps: [a.left - r.left, a.top - r.top, r.right - a.right, r.bottom - a.bottom, px(ring) - px(t)].map((v) => Math.round(v * 100) / 100), at: [a.x, a.y, a.width, a.height].map(Math.round) };
+  });
+  await expect.poll(async () => { const m = await measure(); return m === null || (typeof m === "object" && m.gaps.every((v) => Math.abs(v - G) <= 1)) ? "ok" : JSON.stringify(m); }).toBe("ok");
+  const m = await measure();
+  if (m && typeof m === "object") { gaps[name] = m; writeFileSync("test-results/ring-gaps.json", JSON.stringify(gaps, null, 1)); }
 }
+/** A picture, once the box has moved (on the next frame) and the ring, if shown, hugs its target. */
+async function snap(page: Page, name: string) {
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  await ringHugs(page, name);
+  mkdirSync(DIR, { recursive: true });
+  await page.screenshot({ path: `${DIR}/${name}.png` });
+}
+let shots = 0;
+const shot = (page: Page, name: string) => snap(page, `${String(++shots).padStart(2, "0")}-${name}`);
 /** The ring is round the target and the box beside it, not over it. */
 async function pointsAt(page: Page, target: Locator) {
   const ring = page.locator(".tut-ring"), card = page.locator(".tut-card");
@@ -232,7 +250,7 @@ test("tutorial: on a practice server, the Tutorial button starts it (an automate
   const coach = coachOf(page);
   await page.waitForTimeout(500);
   await expect(coach).toHaveCount(0); // navigator.webdriver: never offered
-  const pic = (name: string) => page.screenshot({ path: `${DIR}/practice-${name}.png` });
+  const pic = (name: string) => snap(page, `practice-${name}`);
   await page.getByRole("button", { name: "Tutorial", exact: true }).click();
   expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("BODY"); // a mouse click leaves the focus nowhere: Enter still records
 
@@ -330,7 +348,7 @@ test("tutorial: another patient's scan never moves the tour on (the box asks for
   await expect(coach).not.toContainText(/white ring|ractice/);
   await expect(coach.getByRole("button", { name: "Next", exact: true })).toHaveCount(0); // it waits
   await imageReady(page);
-  await page.screenshot({ path: `${DIR}/other-scan-4.png` });
+  await snap(page, "other-scan-4");
   await openFromFrame("RIDER-2619750334", /^Open Baseline/);
   await step(coach, 4, "Click the centre of the white ring on Image 133.", 60_000);
   await skipTo("Press Study table.");
@@ -340,12 +358,12 @@ test("tutorial: another patient's scan never moves the tour on (the box asks for
   await expect(row).toHaveCount(0); // the Record is not on the page while the switch is off
   await pointsAt(page, sw);
   await expect(coach.getByRole("button", { name: "Next", exact: true })).toHaveCount(0); // it waits for the switch
-  await page.screenshot({ path: `${DIR}/lab-rows-8-switch-off.png` });
+  await snap(page, "lab-rows-8-switch-off");
   await sw.click();
   await step(coach, 8, "This line is your Record");
   await expect(coach).not.toContainText("Turn on Practice rows");
   await pointsAt(page, row);
-  await page.screenshot({ path: `${DIR}/lab-rows-8-record.png` });
+  await snap(page, "lab-rows-8-record");
   await next(coach);
   await step(coach, 8, "Download CSV saves the table");
   await next(coach);
@@ -358,7 +376,7 @@ test("tutorial: another patient's scan never moves the tour on (the box asks for
   await page.getByRole("tab", { name: "Study table" }).click(); // the table opens again with its default: practice rows hidden
   await step(coach, 10, "Turn on Practice rows to see your Record.");
   await pointsAt(page, sw);
-  await page.screenshot({ path: `${DIR}/lab-rows-10-switch-off.png` });
+  await snap(page, "lab-rows-10-switch-off");
   await sw.click();
   await step(coach, 10, "both scans side by side");
   await pointsAt(page, row);

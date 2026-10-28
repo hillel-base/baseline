@@ -30,7 +30,7 @@ const LOCAL_ENGINE = import.meta.env.VITE_ENGINE_URL ?? "http://localhost:8000";
 export const LOCAL_PROBE_MS = 60_000;
 /** Automatic sleep: after this long without a click on the page, the card stops asking the practice servers, so a forgotten tab cannot keep them awake. */
 export const IDLE_STOP_MS = 15 * 60_000;
-const TABS = ["Measure", "Study table", "Demo"] as const;
+const TABS = ["Measure", "Study table"] as const; // the Demo has no tab: the choice card opens it when no server is ready
 type Tab = (typeof TABS)[number];
 type Engine = { state: "idle" } | { state: "trying"; local: boolean } | { state: "none" } | { state: "live"; commit: string; model: string; practice?: string; picker?: boolean }; // practice: the server in use
 const PRACTICE = servers(import.meta.env.VITE_PRACTICE_SERVERS); // set at build time; none hides the practice option
@@ -181,7 +181,7 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
             <p role="alert">{gone ? PRACTICE_STOPPED : BUSY}</p>
             <div className="m-empty-actions">
               <button className="m-btn primary" onClick={tryAgain} disabled={asking}>Try again</button>
-              {busy && <button className="m-btn" onClick={onDemo}>Open the Demo</button>}
+              {(busy || gone) && <button className="m-btn" onClick={onDemo}>Open the Demo</button>}{/* with no Demo tab, the only way to it while no server answers */}
             </div>
           </> : undefined} /></div>
       </>
@@ -202,7 +202,7 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
       {queued}
       <p>Measure uses the engine on this computer.</p>
       <div className="shell-actions">
-        {SAFARI && <button className="shell-btn primary" onClick={onDemo}>Open the Demo</button>}
+        <button className={SAFARI ? "shell-btn primary" : "shell-btn"} onClick={onDemo}>Open the Demo</button>{/* with no Demo tab, the card is the way to it */}
         {local("Use my local engine", true)}
       </div>
       <p className="shell-note">{REAL_DATA_NOTE}</p>
@@ -232,7 +232,7 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
           {s === "idle" && btn("Try again", () => { setPractice(undefined); setIdle(false); /* a 15-minute-old answer is not shown as now */ }, true, false)}
           {s === "idle" && btn("Open the Demo", onDemo, false, false)}
           {s === "busy" && btn("Open the Demo", onDemo, false, false)}
-          {SAFARI && (!s || s === "unavailable") && btn("Open the Demo", onDemo, true, false)}
+          {(!s || s === "unavailable") && btn("Open the Demo", onDemo, SAFARI, false)}{/* no server ready, in every browser: with no Demo tab, the card is the way to it */}
           {local("Use my local engine", !s || s === "unavailable")}
         </div>
         <p className="shell-note">{s !== "paused" && <>{install} · </>}{REAL_DATA_NOTE}</p>{/* paused: the link is in the line above, once on the card */}
@@ -270,7 +270,7 @@ export function Shell() {
   const onStep = useCallback((step?: string) => setTour((t) => (t.step === step ? t : { ...t, step })), []);
   const startTour = () => { markOffered(STORE); setTour((t) => ({ ...t, run: t.run + 1, step: undefined })); setTutorial("on"); }; // no step from an earlier run: no stale cross
   useEffect(() => { if (tutorial === "offer" && session?.kind === "user") markOffered(STORE); }, [tutorial, session?.kind]); // offered once: when it shows
-  const [tab, setTab] = useState<Tab | "Install">("Measure"); // Install: Run it on your computer, a view without a tab
+  const [tab, setTab] = useState<Tab | "Install" | "Demo">("Measure"); // views without a tab: Install (Run it on your computer) and the Demo
   const [seen, setSeen] = useState<Tab[]>(["Measure"]); // Measure stays mounted once opened, so a scan and its table survive a tab change
   const about = useRef<HTMLDialogElement>(null);
   const [left, setLeft] = useState(0); // this person's rows still waiting: they are sent only when this person signs in again here
@@ -293,10 +293,10 @@ export function Shell() {
       </header>
       {tutorial !== "off" && <Coach key={tour.run} mode={tutorial} scan={tour.scan} patientN={tour.n} onStart={startTour} onDecline={() => setTutorial("off")} onLater={() => { unmarkOffered(STORE); setTutorial("off"); }} onExit={() => setTutorial("off")} onStep={onStep} />}
       <main className="shell-main">
-        {seen.includes("Measure") && <div hidden={tab !== "Measure"}><Measure uid={user.id} onDemo={() => pick("Demo")} onInstall={() => setTab("Install")}
+        {seen.includes("Measure") && <div hidden={tab !== "Measure"}><Measure uid={user.id} onDemo={() => setTab("Demo")} onInstall={() => setTab("Install")}
           cross={tutorial !== "on" ? undefined : tour.step === "cross" ? CASE.cross : tour.step === "correct" ? CASE.fix : undefined} onScan={tutorial === "on" ? onScan : undefined} /></div>}
         {tab === "Study table" && <StudyView onRemove={(scanRef, m, reason) => box.remove(scanRef, m, reason)} waiting={box.waiting} pending={box.pending} onGoToMeasure={() => pick("Measure")} />}
-        {tab === "Demo" && <DemoView />}
+        {tab === "Demo" && <DemoView onBack={() => pick("Measure")} />}
         {tab === "Install" && <InstallView onBack={() => pick("Measure")} />}
       </main>
       <footer className="shell-footer">

@@ -6,8 +6,8 @@ import { SliceView } from "./SliceView";
 
 const SIZES = ["small", "medium", "large"]; // the recorded cases, in volume order
 
-/** The Demo tab: recorded results replayed through the same viewer and panel as Measure. Nothing here needs the engine. */
-export function DemoView() {
+/** The Demo: recorded results replayed through the same viewer and panel as Measure. Nothing here needs the engine. It has no tab: the choice card opens it. */
+export function DemoView({ onBack }: { onBack: () => void }) {
   const [index, setIndex] = useState<DemoIndex>();
   const [cases, setCases] = useState<ScanRow[]>();
   const [failed, setFailed] = useState(false);
@@ -35,6 +35,7 @@ export function DemoView() {
   };
   return (
     <div>
+      <button className="shell-btn" onClick={onBack}>Back to Measure</button>
       <p className="shell-status warn" role="status">Demo: recorded results on development cases, not a live model.</p>
       {failed ? <p role="alert">Could not read the demo files.</p> : (
         <>

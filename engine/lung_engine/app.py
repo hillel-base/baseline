@@ -495,7 +495,7 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             if not server or s["patient"] in practice:
                 by.setdefault(s["patient"], []).append(s)
         out = []
-        for n, (p, ss) in enumerate(sorted(by.items()), 1):
+        for n, (p, ss) in enumerate(sorted(by.items(), key=lambda kv: (server and kv[0] != TUTORIAL, kv[0])), 1):  # a practice server: the tutorial's case is Practice patient 1
             scans = []
             for s in sorted(ss, key=lambda s: s["series"] != "test"):
                 d = data_root / p / f"ct_{s['series']}"
@@ -577,7 +577,7 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
         out = {"id": shown(s.id, request), "scan_ref": ref, "study_code": code, "patient": code if hidden(s.id) and cross_origin(request) else s.patient, "series": s.series,
                "shape": list(s.array.shape), "spacing": list(s.spacing),
                "instance_numbers": s.instance_numbers, "series_number": s.series_number, "study_date": s.study_date,
-               "days_from_baseline": (m["day"] or 0) if m else baseline_days(data_root, s.patient, s.study_date),
+               "days_from_baseline": m["day"] if m else baseline_days(data_root, s.patient, s.study_date),  # None when a date is missing: 0 would read as "the same day"
                "timepoint": m.get("timepoint") if m else None,  # a study scan's order; None: the page's own rule (RIDER test 0, retest 1)
                "slice_thickness_mm": s.slice_thickness_mm,
                "head_dir": head_dir(s)}

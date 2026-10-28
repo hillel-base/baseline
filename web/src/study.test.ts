@@ -19,6 +19,16 @@ test("toEntities maps every field", () => {
   const rider = { ...scan, study_code: "RIDER-1286684383" }; // the public practice data keeps its own name as its study code
   expect(toEntities(toRow(rider, outline(1), 1, 1, "f"), rider, info).measurement.practice).toBe(true);
 });
+test("an undated scan (the engine sends no day) leaves days_from_baseline out of the Record, never 0, so it never reads as the same day", () => {
+  const undated = { ...scan, days_from_baseline: null };
+  expect("days_from_baseline" in toEntities(toRow(undated, outline(1), 1, 1, "f"), undated, info).scan).toBe(false);
+  expect(toEntities(toRow(scan, outline(1), 1, 1, "f"), scan, info).scan.days_from_baseline).toBe(scan.days_from_baseline);
+});
+test("change: an undated scan (no day) gives no days between, so its change is the plain % and never a same-day difference", () => {
+  expect(change({ volume: 1, days: 0 }, { volume: 1.5, days: null })).toEqual({ days: undefined, pct: 50 });
+  expect(change({ volume: 1, days: undefined }, { volume: 1.5, days: 0 })).toEqual({ days: undefined, pct: 50 });
+  expect(change({ volume: 1, days: 0 }, { volume: 1.03, days: 0 })).toEqual({ days: 0, pct: 3 });
+});
 test("timepoint 0 for test; method is tool edited after a correction; no instance numbers means z = image - 1", () => {
   expect(toEntities(toRow({ ...scan, series: "test" }, outline(1), 1, 1, "f"), { ...scan, series: "test" }, info).scan.timepoint).toBe(0);
   expect(make(3).measurement.method).toBe("tool edited");
@@ -98,7 +108,7 @@ test("two measurements of the same label and timepoint both show, each row marke
 });
 
 // Rows are only added. A correction names the row it replaces; a removal row names the row it removes, with a reason.
-import { NOT_SAVED, OUT_OF_DATE_NOTE, RETRY_MS, SLOW_MS, STUDY_COLUMNS, WAITING, failReason, history, marks, onlyPractice, outbox, replacesLine, signOutLine, studyCSV, type SaveState } from "./study";
+import { NOT_SAVED, OUT_OF_DATE_NOTE, RETRY_MS, SLOW_MS, STUDY_COLUMNS, WAITING, change, failReason, history, marks, onlyPractice, outbox, replacesLine, signOutLine, studyCSV, type SaveState } from "./study";
 import { COLUMNS, toCSV } from "./record";
 type Row = Record<string, any> & { id: string };
 const me = () => "u-1"; // Base44's user id (auth.me().id): a waiting row is tied to it, never to an email
@@ -137,9 +147,45 @@ test("the Study CSV: the 13 columns Base44 holds, with Copy row's names and valu
   const copy = toCSV([row]).trim().split("\n")[1].split(","), shared = STUDY_COLUMNS.filter((c) => (COLUMNS as string[]).includes(c));
   expect(shared).toEqual(["series_number", "nodule", "long_mm", "short_mm", "width", "volume_ml", "depth_mm", "clicks", "corrections", "seconds_to_record", "recorded_at", "slice_thickness_mm", "slice_spacing_mm"]);
   for (const l of lines) for (const c of shared) expect(l[STUDY_COLUMNS.indexOf(c)], c).toBe(copy[(COLUMNS as string[]).indexOf(c)]);
-  expect(lines.map((l) => [l[0], l[1], l.at(-2), l.at(-1)])).toEqual([["a1b2c3d4", "1", "yes", ""], ["a1b2c3d4", "1", "", ""], ["a1b2c3d4", "1", "", "wrong scan"]]);
+  const col = (l: string[], c: string) => l[STUDY_COLUMNS.indexOf(c)];
+  expect(lines.map((l) => [l[0], l[1], col(l, "replaced"), col(l, "removed")])).toEqual([["a1b2c3d4", "1", "yes", ""], ["a1b2c3d4", "1", "", ""], ["a1b2c3d4", "1", "", "wrong scan"]]);
   expect(studyCSV(scans, [])).toBe(STUDY_COLUMNS.join(",") + "\n");
   expect(studyCSV(scans, [{ ...ms[0], depth_mm: undefined as never }]).split("\n")[1]).not.toContain("undefined"); // a field Base44 does not hold: an empty cell
+});
+// More details and the CSV: a row against the same nodule's current row at the previous timepoint
+const day = (id: string, study_code: string, timepoint: number, days_from_baseline?: number) => ({ ...sc(id, study_code, timepoint), days_from_baseline } as ScanFields & { id: string });
+test("change: the days between two scans and the volume change in %, one decimal; a same-day pair keeps its change; nothing without a previous cell", () => {
+  expect(change({ volume: 1.2, days: 0 }, { volume: 1.52, days: 91 })).toEqual({ days: 91, pct: 26.7 }); // growth
+  expect(change({ volume: 0.61, days: 0 }, { volume: 0.63, days: 0 })).toEqual({ days: 0, pct: 3.3 }); // a same-day repeat scan: the repeat difference
+  expect(change({ volume: 2.1, days: 0 }, { volume: 1.85, days: 84 })).toEqual({ days: 84, pct: -11.9 });
+  expect(change({ volume: 1, days: 0 }, { volume: 0.9996, days: 0 }).pct).toBe(0); // never -0
+  expect(change(undefined, { volume: 1, days: 30 })).toEqual({}); // the first timepoint, or no row there
+  expect(change({ volume: 1, days: undefined }, { volume: 2, days: 30 })).toEqual({ days: undefined, pct: 100 }); // a scan with no day: the change only
+  expect(change({ volume: 0, days: 0 }, { volume: 2, days: 30 }).pct).toBeUndefined();
+});
+test("studyRows: each cell carries its scan's days from the baseline, series number and slice thickness", () => {
+  const scans = [{ ...day("s0", "A", 0, 0), series_number: 3, slice_thickness_mm: 1.25 }];
+  expect(studyRows(scans, [mm("s0", "N1", 10)])[0].cells[0]).toMatchObject({ days: 0, series: 3, thickness: 1.25 });
+});
+test("the Study CSV ends with days_between and volume_change_pct: against the same nodule's current row at the previous timepoint, empty for the first or with none", () => {
+  expect(STUDY_COLUMNS.slice(0, -2)).toEqual(["study_code", "timepoint", "days_from_baseline", "series_number", "nodule", "long_mm", "short_mm", "width", "volume_ml", "depth_mm", "clicks",
+    "corrections", "seconds_to_record", "recorded_at", "slice_thickness_mm", "slice_spacing_mm", "method", "replaced", "removed"]); // the old columns keep their names and order
+  expect(STUDY_COLUMNS.slice(-2)).toEqual(["days_between", "volume_change_pct"]);
+  const scans = [day("a0", "A", 0, 0), day("a1", "A", 1, 0), day("b0", "B", 0, 0), day("b1", "B", 1, 91), day("b2", "B", 2, 180), day("c1", "C", 1, 40)];
+  const v = (id: string, scan_id: string, nodule_label: string, volume_ml: number, more: Partial<MeasurementFields> = {}) => mr(id, { scan_id, nodule_label, volume_ml, ...more });
+  const ms = [v("a0", "a0", "N1", 0.61), v("a1", "a1", "N1", 0.63), // a same-day pair
+    v("b0", "b0", "N1", 1.2), v("b1x", "b1", "N1", 1.4), v("b1", "b1", "N1", 1.52, { replaces_id: "b1x" }), v("b2", "b2", "N1", 1.9), // growth, three timepoints, a corrected row
+    v("b1n2", "b1", "N2", 0.5), // a Follow-up with no Baseline row
+    v("c1", "c1", "N1", 0.8)]; // no row at the previous timepoint
+  const [head, ...lines] = studyCSV(scans, ms).trim().split("\n").map((l) => l.split(","));
+  expect(head.slice(-2)).toEqual(["days_between", "volume_change_pct"]);
+  const got = lines.map((l) => [l[0], l[1], l[STUDY_COLUMNS.indexOf("nodule")], l[STUDY_COLUMNS.indexOf("replaced")], ...l.slice(-2)]);
+  expect(got).toEqual([
+    ["A", "0", "1", "", "", ""], ["A", "1", "1", "", "0", "3.3"], // the first timepoint is empty; same day: 0 days, the change
+    ["B", "0", "1", "", "", ""], ["B", "1", "1", "yes", "91", "16.7"], ["B", "1", "1", "", "91", "26.7"], ["B", "2", "1", "", "89", "25"], // the replaced row too, against the current Baseline
+    ["B", "1", "2", "", "", ""],
+    ["C", "1", "1", "", "", ""],
+  ]);
 });
 test("the Study CSV writes recorded_at as Copy row does, whatever text Base44 gives the time back in", () => {
   const row = toRow(scan, outline(1), 1, 8.44, "f", new Date(now)), e = toEntities(row, scan, info);

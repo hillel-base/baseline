@@ -43,7 +43,7 @@ The command:
    - **Mac without Chrome:** the page on your own computer, `http://localhost:8000`, in your default browser. Safari can use it (see [Safari](#troubleshooting)).
    - **Linux and Windows:** the Baseline page, in your default browser. It connects to the engine on your computer by itself.
 
-On a Mac with Apple silicon (M4 Pro), the first run took about 7 minutes from the command to a running engine (6 min 44 s in a clean install; the nodule finder took 18 s of it and the 8 practice patients about 4 minutes; the finder's load check, added after that install, adds about 27 s). It downloaded about 3.5 GB and used about 4.8 GB of disk. Run the same command again to update the code and start the tool: steps already done are skipped, and the engine was running again in about 10 s. Stop the engine with Ctrl+C, or close the window.
+On a Mac with Apple silicon (M4 Pro), the first run took about 7 minutes from the command to a running engine (6 min 44 s in a clean install; the nodule finder took 18 s of it and the 8 practice patients about 4 minutes; the finder's load check, added after that install, adds about 27 s). It downloaded about 3.5 GB and used about 4.8 GB of disk. Run the same command again to update the code and start the tool: steps already done are skipped, and the engine was running again in about 10 s. After an update to a new version, it also builds the local page again (or downloads it, without Node), about 20 s on our Mac. Stop the engine with Ctrl+C, or close the window.
 
 Then:
 1. **Sign in** (the Baseline page only). It is invite-only. Without an invitation, open `http://localhost:8000` instead: the page on your own computer needs no sign-in.

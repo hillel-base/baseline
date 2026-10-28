@@ -165,13 +165,14 @@ def study_date(d: Path) -> str | None:
     return None
 
 
-def baseline_days(root: Path, patient: str, date: str | None) -> int:
-    """Whole days from the patient's earliest test/retest study date to `date`. Reads one header in each series folder, never pixels. 0 when a date is missing."""
+def baseline_days(root: Path, patient: str, date: str | None) -> int | None:
+    """Whole days from the patient's earliest test/retest study date to `date`. Reads one header in each series folder, never pixels.
+    None when a date is missing (a blanked date in an anonymised export): 0 would read as "the same day"."""
     if date is None:
-        return 0
+        return None
     dates = [study_date(d) for d in (root / patient / "ct_test", root / patient / "ct_retest") if d.is_dir()]
     if not dates or None in dates:
-        return 0
+        return None
     return (datetime.strptime(date, "%Y-%m-%d") - datetime.strptime(min(dates), "%Y-%m-%d")).days
 
 

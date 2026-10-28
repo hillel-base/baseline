@@ -7,8 +7,9 @@ import { STEPS, appHasOpen, back, escExits, idle, next, observe, placeBox, show,
 const nameOf = (el: Element) => (el.getAttribute("aria-label") ?? el.textContent ?? "").replace(/\s+/g, " ").trim();
 const named = (doc: Document, sel: string, name?: RegExp) => [...doc.querySelectorAll(sel)].find((e) => !e.closest(".tut") && e.getClientRects().length > 0 && (!name || name.test(nameOf(e))));
 const R = 44; // the room kept clear round the white ring, so the box never hides the nodule's centre
+const G = 4; // the ring's gap round its target, the same on all four sides; its corners are the target's, G further out
 
-function locate(doc: Document, a: Anchor): (Rect & { ring: boolean }) | undefined {
+function locate(doc: Document, a: Anchor): (Rect & { ring: boolean; el?: Element }) | undefined {
   if (a.sel === "@cross") { // SliceView writes the ring's place on its marks canvas, in CSS px
     const c = doc.querySelector<HTMLCanvasElement>('canvas[aria-label="Axis lines and click marks"]'), t = c?.dataset.target;
     if (!c || !t || !c.getClientRects().length) return;
@@ -18,7 +19,7 @@ function locate(doc: Document, a: Anchor): (Rect & { ring: boolean }) | undefine
   const el = named(doc, a.sel, a.name);
   if (!el) return;
   const r = el.getBoundingClientRect();
-  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, ring: r.width * r.height < innerWidth * innerHeight * 0.4 }; // no ring round a frame grown over the page
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, ring: r.width * r.height < innerWidth * innerHeight * 0.4, el }; // no ring round a frame grown over the page
 }
 
 /** The facts the steps need. edits counts finished corrections: a busy status that is not Recording or Finding, then not busy. */
@@ -56,7 +57,7 @@ if (typeof window !== "undefined") window.addEventListener("keydown", (e) => { i
 type Props = { mode: "offer" | "on"; scan?: string; patientN?: number; onStart: () => void; onDecline: () => void; onLater: () => void; onExit: () => void; onStep: (id?: string) => void };
 
 export function Coach({ mode, scan, patientN, onStart, onDecline, onLater, onExit, onStep }: Props) {
-  const root = useRef<HTMLDivElement>(null), card = useRef<HTMLDivElement>(null), ring = useRef<HTMLDivElement>(null);
+  const root = useRef<HTMLDivElement>(null), card = useRef<HTMLDivElement>(null), ring = useRef<HTMLDivElement>(null), marked = useRef<Element>();
   const edits = useRef({ n: 0, was: false }), seen = useRef({ scan, patientN }), reread = useRef(() => {}), refocus = useRef(false);
   seen.current = { scan, patientN };
   const [facts, setFacts] = useState<Facts>();
@@ -77,7 +78,10 @@ export function Coach({ mode, scan, patientN, onStart, onDecline, onLater, onExi
     Object.assign(c.style, { left: `${Math.round(p.left)}px`, top: `${Math.round(p.top)}px`, visibility: "visible" });
     c.dataset.side = p.side;
     c.style.setProperty("--arrow", `${Math.round(p.arrow)}px`);
-    Object.assign(g.style, at?.ring ? { display: "block", left: `${at.left - 4}px`, top: `${at.top - 4}px`, width: `${at.right - at.left + 8}px`, height: `${at.bottom - at.top + 8}px` } : { display: "none" });
+    const el = at?.ring ? at.el : undefined; // "@cross" has no element: SliceView draws that ring on its canvas
+    if (marked.current !== el) { marked.current?.removeAttribute("data-tut-anchor"); el?.setAttribute("data-tut-anchor", ""); marked.current = el; } // the ring's target, for the e2e to measure
+    Object.assign(g.style, at && el ? { display: "block", left: `${at.left - G}px`, top: `${at.top - G}px`, width: `${at.right - at.left + 2 * G}px`, height: `${at.bottom - at.top + 2 * G}px`,
+      borderRadius: `${(parseFloat(getComputedStyle(el).borderTopLeftRadius) || 0) + G}px` } : { display: "none" });
   };
   const placeRef = useRef(place);
   placeRef.current = place;
@@ -90,12 +94,12 @@ export function Coach({ mode, scan, patientN, onStart, onDecline, onLater, onExi
       if (mode === "on") { const f = read(document, seen.current.scan, seen.current.patientN, edits.current); setFacts((p) => (p && same(p, f) ? p : f)); }
       soon();
     };
-    const mo = new MutationObserver((recs) => { if (!recs.every((r) => root.current?.contains(r.target))) update(); }); // its own moves are not news
+    const mo = new MutationObserver((recs) => { if (!recs.every((r) => root.current?.contains(r.target) || r.attributeName === "data-tut-anchor")) update(); }); // its own moves and marks are not news
     mo.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true });
     update();
     addEventListener("resize", soon); addEventListener("scroll", soon, true);
     reread.current = update;
-    return () => { mo.disconnect(); cancelAnimationFrame(raf); removeEventListener("resize", soon); removeEventListener("scroll", soon, true); };
+    return () => { mo.disconnect(); cancelAnimationFrame(raf); removeEventListener("resize", soon); removeEventListener("scroll", soon, true); marked.current?.removeAttribute("data-tut-anchor"); };
   }, []);
   useEffect(() => reread.current(), [scan, patientN]); // App reported another scan: no DOM change may come with it
   useEffect(() => { if (mode === "on" && facts) setTour((t) => (t ? observe(t, facts) : start(facts))); }, [mode, facts]);

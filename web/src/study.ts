@@ -4,7 +4,7 @@ import { utcTime } from "./utc";
 
 // Numbers only: no study date, no UID, no path, no outline file, no image, no email. A test keeps it so.
 export type ScanFields = {
-  study_code: string; timepoint: number; days_from_baseline: number; scan_ref: string; series_number: number | null; series_label: string;
+  study_code: string; timepoint: number; days_from_baseline?: number | null; scan_ref: string; series_number: number | null; series_label: string;
   slice_thickness_mm: number | null; slice_spacing_mm: number | null; status?: "to do" | "in progress" | "done";
 };
 // The fixed list of removal reasons: no free text anywhere. "recorded by mistake" is Undo's.
@@ -35,7 +35,7 @@ export function toEntities(row: RecordedNodule, scan: ScanMeta, info: { commit: 
   const z = inst ? inst.indexOf(row.click_image!) : row.click_image! - 1;
   return {
     scan: {
-      study_code: scan.study_code, timepoint: scan.timepoint ?? riderTimepoint(scan.series), days_from_baseline: scan.days_from_baseline, scan_ref: scan.scan_ref, status: "in progress", series_number: scan.series_number,
+      study_code: scan.study_code, timepoint: scan.timepoint ?? riderTimepoint(scan.series), ...(scan.days_from_baseline == null ? {} : { days_from_baseline: scan.days_from_baseline }), scan_ref: scan.scan_ref, status: "in progress", series_number: scan.series_number,
       series_label: scan.slice_thickness_mm === null ? "" : `${scan.slice_thickness_mm} mm`, slice_thickness_mm: scan.slice_thickness_mm, slice_spacing_mm: scan.spacing[2],
     },
     measurement: {
@@ -267,7 +267,7 @@ export function outbox(db: Db, kv: Kv, me: () => string | undefined, { onCount =
   };
 }
 
-export type Cell = { long: number; short: number; volume: number; method: string; id: string }; // id: the measurement row's
+export type Cell = { long: number; short: number; volume: number; method: string; id: string; days?: number | null; series?: number | null; thickness?: number | null }; // id: the measurement row's; the rest: its scan's
 export type StudyRow = { study_code: string; nodule_label: string; cells: Record<number, Cell | undefined>; duplicate: boolean }; // cells by timepoint
 const by = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
 type S = ScanFields & { id: string };
@@ -287,9 +287,17 @@ export function studyRows(scans: S[], measurements: M[], practice = false): Stud
     const same = rows.filter((r) => r.study_code === s.study_code && r.nodule_label === m.nodule_label);
     let row = same.find((r) => r.cells[s.timepoint] === undefined);
     if (!row) { row = { study_code: s.study_code, nodule_label: m.nodule_label, cells: {}, duplicate: false }; rows.push(row); if (same.length) for (const r of [...same, row]) r.duplicate = true; }
-    row.cells[s.timepoint] = { long: m.long_axis_mm, short: m.short_axis_mm, volume: m.volume_ml, method: m.method, id: m.id };
+    row.cells[s.timepoint] = { long: m.long_axis_mm, short: m.short_axis_mm, volume: m.volume_ml, method: m.method, id: m.id, days: s.days_from_baseline, series: s.series_number, thickness: s.slice_thickness_mm };
   }
   return rows.sort((a, b) => by(a.study_code, b.study_code) || by(a.nodule_label, b.nodule_label)); // a stable sort keeps duplicates in the order saved
+}
+
+/** A cell against the same nodule's cell at the previous timepoint: the days between their scans, and the volume change in %, one decimal.
+ *  Each is undefined when unknown (no previous cell, a missing day or volume). Days 0 is a same-day repeat scan: the change is the repeat difference, not growth. */
+export function change(prev: Pick<Cell, "volume" | "days"> | undefined, cur: Pick<Cell, "volume" | "days">): { days?: number; pct?: number } {
+  if (!prev) return {};
+  return { days: cur.days != null && prev.days != null ? cur.days - prev.days : undefined,
+    pct: prev.volume > 0 && cur.volume != null ? Math.round((cur.volume / prev.volume - 1) * 1000) / 10 || 0 : undefined }; // || 0: never -0
 }
 
 /** Every measurement row ever saved, with its mark: the Study table's history, sorted like the table and then by time. */
@@ -305,12 +313,21 @@ export const onlyPractice = (scans: S[], measurements: M[]) => history(scans, me
 /** The 13 columns Base44 holds, under Copy row's names and with its rounding, plus study_code, timepoint, days_from_baseline, method and the marks.
  *  Base44 holds no patient name, series name, file, image number or date, so Copy row's other columns are not here. */
 export const STUDY_COLUMNS = ["study_code", "timepoint", "days_from_baseline", "series_number", "nodule", "long_mm", "short_mm", "width", "volume_ml", "depth_mm", "clicks", "corrections",
-  "seconds_to_record", "recorded_at", "slice_thickness_mm", "slice_spacing_mm", "method", "replaced", "removed"];
+  "seconds_to_record", "recorded_at", "slice_thickness_mm", "slice_spacing_mm", "method", "replaced", "removed", "days_between", "volume_change_pct"];
 /** A Base44 time as Copy row writes it (toISOString), whatever text Base44 gives it back in; text that is not a time is kept as it is. */
 const iso = (s?: string) => { const t = time(s); return Number.isNaN(t) ? s : new Date(t).toISOString(); };
-export const studyCSV = (scans: S[], measurements: M[], practice = false) => toCSV(history(scans, measurements, practice).map(({ scan: s, ...m }) => Object.fromEntries(Object.entries({
+/** days_between and volume_change_pct: a row against the same nodule's current row at the previous timepoint, as the Study table pairs them (its line,
+ *  else the first line of that code and label with one); empty for the first timepoint or when there is none. */
+export const studyCSV = (scans: S[], measurements: M[], practice = false) => {
+  const lines = studyRows(scans, measurements, practice);
+  const previous = (s: S, m: M) => {
+    const t = s.timepoint, same = lines.filter((l) => l.study_code === s.study_code && l.nodule_label === m.nodule_label);
+    return (same.find((l) => l.cells[t]?.id === m.id) ?? same.find((l) => l.cells[t - 1]))?.cells[t - 1];
+  };
+  return toCSV(history(scans, measurements, practice).map(({ scan: s, ...m }) => { const ch = change(previous(s, m as M), { volume: m.volume_ml, days: s.days_from_baseline }); return Object.fromEntries(Object.entries({
   study_code: s.study_code, timepoint: s.timepoint, days_from_baseline: s.days_from_baseline, series_number: s.series_number, nodule: Number(m.nodule_label.slice(1)),
   long_mm: m.long_axis_mm, short_mm: m.short_axis_mm, width: m.width_method, volume_ml: m.volume_ml, depth_mm: m.depth_mm, clicks: m.clicks, corrections: m.corrections,
   seconds_to_record: m.edit_seconds, recorded_at: iso(m.approved_at), slice_thickness_mm: s.slice_thickness_mm, slice_spacing_mm: s.slice_spacing_mm, method: m.method,
-  replaced: m.mark === "replaced" ? "yes" : "", removed: m.mark === "current" || m.mark === "replaced" ? "" : m.mark,
-}).map(([k, v]) => [k, v ?? null]))), STUDY_COLUMNS); // a field Base44 does not hold is an empty cell
+  replaced: m.mark === "replaced" ? "yes" : "", removed: m.mark === "current" || m.mark === "replaced" ? "" : m.mark, days_between: ch.days, volume_change_pct: ch.pct,
+}).map(([k, v]) => [k, v ?? null])); }), STUDY_COLUMNS); // a field Base44 does not hold is an empty cell
+};

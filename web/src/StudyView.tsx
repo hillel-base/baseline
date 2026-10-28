@@ -3,7 +3,7 @@ import { download } from "./App";
 import { entities } from "./base44";
 import { utcTime } from "./utc";
 import {
-  OUT_OF_DATE_NOTE, REMOVED_REASONS, RETRY_MS, history, isPractice, marks, onlyPractice, studyCSV, studyRows, tpName,
+  OUT_OF_DATE_NOTE, REMOVED_REASONS, RETRY_MS, change, history, isPractice, marks, onlyPractice, studyCSV, studyRows, tpName,
   type MeasurementFields, type Payload, type RemovedReason, type ScanFields, type StudyRow,
 } from "./study";
 
@@ -18,6 +18,11 @@ type Line = StudyRow & { practice: boolean; waiting?: boolean };
 
 const RECORD_LINE = "Every Record saved on Base44. Numbers only: names and dates stay on your computer.";
 const HISTORY_LINE = "Every saved row, newest first. Nothing is ever changed or deleted: a correction or a removal is a new row.";
+/** The title row's second line while every row is a practice row (rule 5): in place of the line above, so nothing moves when the rows come. */
+export const PRACTICE_LINE = "Practice rows: these come from public practice scans and are kept apart from the study record.";
+/** The title row's second line: the practice notice in the Record view while every row is a practice row (nothing moves when the rows come); History keeps its own. */
+export const headLine = (view: "record" | "history", practiceOnly: boolean) => (view === "history" ? HISTORY_LINE : practiceOnly ? PRACTICE_LINE : RECORD_LINE);
+const NO_MATCH = "No lines match this search and filter.";
 const EDITED_NOTE = '"Edited" means a correction, a paint stroke or a dragged axis';
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -28,6 +33,30 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 const num = (v: number | null | undefined, d: number) => (v == null ? <span className="muted">—</span> : v.toFixed(d));
 const cells = (l: Line) => Object.values(l.cells).filter((c) => c !== undefined);
 const lineKey = (l: Line) => cells(l).map((c) => c.id).join(); // each measurement sits in one line only
+/** A volume change for the Record view: signed, one decimal; a same-day repeat scan says so (the repeat difference, not growth). */
+export const changeText = ({ days, pct }: { days?: number; pct?: number }) => pct === undefined ? "—" : `${pct > 0 ? "+" : ""}${pct.toFixed(1)}%${days === 0 ? " (same day)" : ""}`;
+export type Method = "all" | "approved" | "edited";
+/** Search codes (case-insensitive, any part) and the method filter: a line matches when any of its methods is the one chosen ("Edited": not "tool approved"). */
+export const matches = (code: string, methods: string[], q: string, f: Method) =>
+  code.toLowerCase().includes(q.trim().toLowerCase()) && (f === "all" || methods.some((m) => (m === "tool approved") === (f === "approved")));
+/** A Record view column to sort by: "patient", "nodule", or a timepoint's "long", "short", "volume" or "change" ("1:volume"). */
+export type Sort = { key: string; desc: boolean };
+const value = (l: Line, key: string): string | number | undefined => {
+  if (key === "patient") return l.study_code;
+  if (key === "nodule") return l.nodule_label;
+  const [t, k] = key.split(":"), c = l.cells[Number(t)];
+  return !c ? undefined : k === "change" ? change(l.cells[Number(t) - 1], c).pct : c[k as "long" | "short" | "volume"];
+};
+/** The lines by one column, ascending or descending; lines with no value last either way, ties in their order (a stable sort). */
+export function sortLines<T extends Line>(lines: T[], sort?: Sort): T[] {
+  if (!sort) return lines;
+  return [...lines].sort((a, b) => {
+    const x = value(a, sort.key) ?? undefined, y = value(b, sort.key) ?? undefined; // a null value is missing too: last, never 0
+    if (x === undefined || y === undefined) return Number(x === undefined) - Number(y === undefined);
+    const d = typeof x === "string" ? by(x, String(y)) : x - (y as number);
+    return sort.desc ? -d : d;
+  });
+}
 const methodChip = (method: string) => method === "tool approved" ? <span className="m-state ok">Approved</span> : <span className="m-state warn">Edited</span>; // "tool edited": clicks > 1, a paint stroke or a dragged axis (toEntities)
 
 /** The Record view: one line per nodule from the rows that stand, then this person's Records still waiting, by patient and nodule.
@@ -38,7 +67,7 @@ export function recordLines({ scans, ms, waiting }: Data, show: boolean) {
     ...studyRows(scans, ms, true).map((r) => ({ ...r, practice: Object.values(r.cells).some((c) => c && isPractice(r, byId.get(c.id)!)) })),
     ...waiting.map(({ key, scan: s, measurement: w }) => ({
       study_code: s.study_code, nodule_label: w.nodule_label, duplicate: false, waiting: true, practice: isPractice(s, w),
-      cells: { [s.timepoint]: { long: w.long_axis_mm, short: w.short_axis_mm, volume: w.volume_ml, method: w.method, id: key } },
+      cells: { [s.timepoint]: { long: w.long_axis_mm, short: w.short_axis_mm, volume: w.volume_ml, method: w.method, id: key, days: s.days_from_baseline, series: s.series_number, thickness: s.slice_thickness_mm } },
     })),
   ];
   const lines = all.filter((l) => show || !l.practice).sort((a, b) => by(a.study_code, b.study_code) || by(a.nodule_label, b.nodule_label)); // stable: saved first
@@ -126,6 +155,10 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
   const [practice, setPractice] = useState<boolean>(); // undefined: the default 
   const [menu, setMenu] = useState<{ key: string; button: HTMLButtonElement }>();
   const [said, setSaid] = useState<string>(); // what the last Remove did
+  const [details, setDetails] = useState(false); // More details: each scan's series and slice thickness; after the first timepoint, days between and volume change
+  const [sort, setSort] = useState<Sort>();
+  const [q, setQ] = useState(""); // Search codes
+  const [method, setMethod] = useState<Method>("all");
   const section = useRef<HTMLElement>(null);
   const refocus = useRef<number>(); // after a Remove: focus the ⋯ button at this place once the reload shows
   useEffect(() => {
@@ -138,6 +171,8 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
   const auto = allPractice(data), show = practice ?? auto;
   const { lines, hidden } = recordLines(data, show);
   const tps = loading ? [0, 1] : [...new Set(lines.flatMap((l) => Object.keys(l.cells).map(Number)))].sort((a, b) => a - b);
+  const extra = (t: number) => (!details ? [] : t === tps[0] ? ["series", "slice"] : ["series", "slice", "days", "change"]); // More details' columns of a timepoint
+  const shownLines = sortLines(lines.filter((l) => matches(l.study_code, tps.flatMap((t) => l.cells[t]?.method ?? []), q, method)), sort);
   const close = () => { menu?.button.focus(); setMenu(undefined); };
   /** Removes a line at the chosen timepoints. What it did shows outside the menu, which closes: a line with one timepoint fewer is a new line, and
    *  its menu would go with the note. Focus then goes to the next row's ⋯ (or this row's, if it still stands). place: the line's ⋯ among all. */
@@ -157,15 +192,25 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
     </div>
   );
   const unit = (name: string, u: string, sep = false) => <th className={sep ? "r st-sep" : "r"}>{name} <span className="st-unit">{u}</span></th>;
+  /** A header that sorts the Record view: a click toggles ascending and descending. Off (but there, so nothing moves) while the table loads. */
+  const sortable = (key: string, label: ReactNode, cls?: string, more?: object) => {
+    const on = sort?.key === key;
+    return <th className={cls} aria-sort={on ? (sort.desc ? "descending" : "ascending") : undefined} {...more}>
+      <button className="st-sort" disabled={loading} onClick={() => setSort({ key, desc: on && !sort.desc })}>{label}{on && <span className="st-arrow" aria-hidden="true">{sort.desc ? "▼" : "▲"}</span>}</button>
+    </th>;
+  };
+  const u = (name: string, un: string) => <>{name} <span className="st-unit">{un}</span></>;
   const code = (c: string, practiceRow: boolean, muted = false) => <><span className={muted ? "muted" : undefined}>{c}</span>{practiceRow && <span className="m-tag st-chip">Practice</span>}</>;
   const head = (
     <thead>
       <tr>
-        <th rowSpan={2}>Patient</th><th rowSpan={2}>Nodule</th>
-        {tps.map((t) => <th key={t} colSpan={4} scope="colgroup" className="st-group st-sep">{tpName(t)}</th>)}
+        {sortable("patient", "Patient", undefined, { rowSpan: 2 })}{sortable("nodule", "Nodule", undefined, { rowSpan: 2 })}
+        {tps.map((t) => <th key={t} colSpan={4 + extra(t).length} scope="colgroup" className="st-group st-sep">{tpName(t)}</th>)}
         <th rowSpan={2} className="st-sep"><span className="sr-only">Actions</span></th>
       </tr>
-      <tr>{tps.map((t) => <Fragment key={t}>{unit("Long", "mm", true)}{unit("Short", "mm")}{unit("Volume", "mL")}<th>Method</th></Fragment>)}</tr>
+      <tr>{tps.map((t) => <Fragment key={t}>{sortable(`${t}:long`, u("Long", "mm"), "r st-sep")}{sortable(`${t}:short`, u("Short", "mm"), "r")}{sortable(`${t}:volume`, u("Volume", "mL"), "r")}<th>Method</th>
+        {extra(t).map((k) => k === "series" ? <th key={k} className="r">Series</th> : k === "slice" ? <Fragment key={k}>{unit("Slice", "mm")}</Fragment>
+          : k === "days" ? <th key={k} className="r">Days between</th> : <Fragment key={k}>{sortable(`${t}:change`, "Change", "r")}</Fragment>)}</Fragment>)}</tr>
     </thead>
   );
   const bar = (w: number, cls = "st-bar") => <i className={cls} style={{ width: w }} />; // a placeholder about as wide as what comes there
@@ -183,13 +228,16 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
       </tbody>
     </table>
   );
+  const columns = 3 + tps.reduce((n, t) => n + 4 + extra(t).length, 0);
+  const noMatch = <tr><td colSpan={columns} className="muted">{NO_MATCH}</td></tr>;
   const record = loading ? skeleton : !lines.length ? empty : (
     <>
-      <table className="st-table" aria-label="Study record">
+      <table className={details ? "st-table st-dense" : "st-table"} aria-label="Study record">
         {head}
         <tbody>
-          {lines.map((l, i) => {
-            const first = i === 0 || lines[i - 1].study_code !== l.study_code, key = lineKey(l), open = menu?.key === key, at = tps.filter((t) => l.cells[t]);
+          {!shownLines.length && noMatch}
+          {shownLines.map((l, i) => {
+            const first = i === 0 || shownLines[i - 1].study_code !== l.study_code, key = lineKey(l), open = menu?.key === key, at = tps.filter((t) => l.cells[t]);
             return (
               <tr key={key} className={first ? "st-first" : undefined}>
                 <td className="st-code">{code(l.study_code, l.practice, !first)}</td>
@@ -197,12 +245,14 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
                 {tps.map((t) => { const c = l.cells[t]; return <Fragment key={t}>
                   <td className="r st-sep">{num(c?.long, 1)}</td><td className="r">{num(c?.short, 1)}</td><td className="r">{num(c?.volume, 2)}</td>
                   <td>{!c ? num(null, 0) : l.waiting ? <span className="m-state warn">Not saved yet</span> : methodChip(c.method)}</td>
+                  {extra(t).map((k) => <td key={k} className="r">{k === "series" ? num(c?.series, 0) : k === "slice" ? (c?.thickness == null ? num(null, 0) : String(c.thickness))
+                    : k === "days" ? num(c && change(l.cells[t - 1], c).days, 0) : !c ? num(null, 0) : changeText(change(l.cells[t - 1], c))}</td>)}
                 </Fragment>; })}
                 <td className="st-acts st-sep">{!l.waiting && <>
                   <button className="m-btn ghost st-more" title="More" aria-label="More" aria-haspopup="dialog" aria-expanded={open}
                     onClick={(ev) => { setSaid(undefined); setMenu(open ? undefined : { key, button: ev.currentTarget }); }}>⋯</button>
                   {open && <RemoveMenu title={`Remove ${l.nodule_label} of ${l.study_code}`} timepoints={at} anchor={menu.button} onClose={close}
-                    onRemove={(r, which) => void remove(l, r, which, lines.slice(0, i).filter((x) => !x.waiting).length)} />}
+                    onRemove={(r, which) => void remove(l, r, which, shownLines.slice(0, i).filter((x) => !x.waiting).length)} />}
                 </>}</td>
               </tr>
             );
@@ -210,19 +260,21 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
         </tbody>
       </table>
       <p className="st-foot muted">
-        {[`${plural(new Set(lines.map((l) => `${l.study_code}/${l.nodule_label}`)).size, "nodule")} on ${plural(new Set(lines.map((l) => l.study_code)).size, "patient")}`,
+        {[`${plural(new Set(shownLines.map((l) => `${l.study_code}/${l.nodule_label}`)).size, "nodule")} on ${plural(new Set(shownLines.map((l) => l.study_code)).size, "patient")}`,
           hidden > 0 && `${plural(hidden, "practice row")} hidden`, EDITED_NOTE].filter(Boolean).join(" · ")}
       </p>
     </>
   );
   const rows = view === "history" ? historyRows(data, show) : [];
+  const shownRows = rows.filter((h) => matches(h.scan.study_code, [h.method], q, method));
   const past = !rows.length ? empty : (
     <table className="st-table" aria-label="History">
       <thead>
         <tr><th>Recorded</th><th>Patient</th><th>Nodule</th><th>Timepoint</th>{unit("Long", "mm")}{unit("Short", "mm")}{unit("Volume", "mL")}<th>Method</th><th>Status</th></tr>
       </thead>
       <tbody>
-        {rows.map((h) => {
+        {!shownRows.length && <tr><td colSpan={9} className="muted">{NO_MATCH}</td></tr>}
+        {shownRows.map((h) => {
           const old = h.mark !== "current", n = (v: number | null | undefined, d: number) => (old && v != null ? <s>{num(v, d)}</s> : num(v, d));
           return (
             <tr key={h.id} className={old ? "st-old" : undefined}>
@@ -244,14 +296,20 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
       <div className="st-head">
         <div>
           <h2>Study table</h2>
-          <p className="muted">{view === "record" ? RECORD_LINE : HISTORY_LINE}</p>
+          <p className="muted">{headLine(view, auto && show) === PRACTICE_LINE ? <><b>Practice rows:</b>{PRACTICE_LINE.slice("Practice rows:".length)}</> : headLine(view, auto && show)}</p>
         </div>
         {(loading || ms.length > 0 || waiting.length > 0) && (
           <div className="st-tools">
             <div className="m-seg st-seg" role="group" aria-label="View">
               {(["record", "history"] as const).map((v) => <button key={v} aria-pressed={view === v} disabled={loading} onClick={() => { setView(v); setMenu(undefined); }}>{v === "record" ? "Record" : "History"}</button>)}
             </div>
+            <label className="pp-search st-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="Search codes" aria-label="Search codes" value={q} disabled={loading} onChange={(e) => setQ(e.target.value)} /></label>
+            <div className="m-seg st-seg" role="group" aria-label="Method">
+              {(["all", "approved", "edited"] as const).map((f) => <button key={f} aria-pressed={method === f} disabled={loading} onClick={() => setMethod(f)}>{f[0].toUpperCase() + f.slice(1)}</button>)}
+            </div>
             <button role="switch" aria-checked={show} className="st-switch" disabled={loading} onClick={() => setPractice(!show)}><span className="st-track" aria-hidden="true" />Practice rows</button>
+            <button role="switch" aria-checked={details} className="st-switch" disabled={loading || view === "history"}
+              onClick={() => { setDetails(!details); if (sort?.key.endsWith(":change")) setSort(undefined); }}><span className="st-track" aria-hidden="true" />More details</button>
             <button className="m-btn" disabled={loading} onClick={() => download(new Blob([studyCSV(scans, ms, show)], { type: "text/csv" }), "study-table.csv")}>Download CSV</button>
           </div>
         )}
@@ -259,7 +317,6 @@ export function StudyTable({ data, onRemove, onChanged, onGoToMeasure, notice, w
       {loading && <p className="sr-only" role="status">Loading the study table…</p>}
       {notice}
       {shown && <p className="st-said muted" role="status">{shown}</p>}
-      {auto && show && <p className="st-banner"><b>Practice rows</b> <span className="muted">These come from public practice scans and are kept apart from the study record.</span></p>}
       {view === "record" ? record : past}
     </section>
   );

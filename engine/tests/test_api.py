@@ -774,6 +774,13 @@ def test_study_date_goes_only_to_a_local_page(client, origin, has_date):
     assert ("study_date" in m) is has_date
 
 
+def test_days_from_baseline_is_none_when_a_date_is_missing(dicom_series):
+    _second(dicom_series, "RIDER-TEST01", date=" ", series="ct_retest")  # a blanked study date (an anonymised export)
+    c = TestClient(create_app(data_root=dicom_series, segmenter_factory=BallSegmenter, runs_dir=dicom_series / "runs"), base_url="http://localhost")
+    assert c.get("/api/scans/RIDER-TEST01_retest").json()["days_from_baseline"] is None
+    assert c.get("/api/scans/RIDER-TEST01_test").json()["days_from_baseline"] is None  # its pair is undated, so no day is known
+
+
 def test_days_from_baseline_counts_from_the_earliest_series(dicom_series):
     _second(dicom_series, "RIDER-TEST01", date="20010213", series="ct_retest")  # 10 days after the test series (20010203)
     c = TestClient(create_app(data_root=dicom_series, segmenter_factory=BallSegmenter, runs_dir=dicom_series / "runs"), base_url="http://localhost")

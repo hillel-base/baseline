@@ -98,8 +98,15 @@
 .st-switch[aria-checked="true"] .st-track { background: var(--accent); }
 .st-switch[aria-checked="true"] .st-track::after { left: 14px; background: #fff; }
 @media (prefers-reduced-motion: reduce) { .st-track::after { transition: none; } }
-.st-banner { margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--line-strong); border-radius: var(--radius-toggle); background: var(--bg-panel); }
-.st-banner b { font-weight: var(--fw-semibold); }
+.st-head p b { font-weight: var(--fw-semibold); color: var(--text); } /* "Practice rows:" in the title row's second line */
+.st-tools .st-search { width: 170px; height: var(--h-button); margin: 0; } /* the Patients panel's search box (pp-search), in the tools row */
+.st-search input:focus-visible { outline: none; } /* the box shows the focus */
+.st-search:has(input:disabled) { opacity: 0.45; }
+.st-sort { display: inline-flex; align-items: baseline; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; white-space: nowrap; }
+.st-sort:hover:not(:disabled), th[aria-sort] > .st-sort { color: var(--text); }
+.st-sort:disabled { cursor: default; }
+.st-arrow { font-size: 9px; line-height: 1; } /* the header row keeps its height */
+.st-table.st-dense th, .st-table.st-dense td { padding-left: 6px; padding-right: 6px; } /* More details: its 17 columns fit the page at 1440 px */
 .st-said { margin: 0 0 var(--space-3); }
 .st-table { width: 100%; border-collapse: collapse; }
 .st-table th { padding: 6px var(--space-3); text-align: left; vertical-align: bottom; white-space: nowrap; border-bottom: 1px solid var(--line);
@@ -168,4 +175,4 @@ body:has(.shell) { margin: 0; background: var(--bg-app); }
 .tut-card[data-side="inside"] .tut-arrow { display: none; }
 .tut-card.tut-offer { width: auto; max-width: none; display: flex; align-items: center; gap: var(--space-2); padding: 3px 4px 3px var(--space-3); white-space: nowrap; }
 .tut:focus { outline: none; } /* the region holds the focus after a keyboard Next (it has no box of its own); Tab then shows the buttons' own ring */
-.tut-ring { position: fixed; z-index: 99; display: none; pointer-events: none; border: 2px solid var(--focus); border-radius: var(--radius-toggle); box-shadow: 0 0 0 3px rgba(255, 119, 60, 0.25); }
+.tut-ring { position: fixed; z-index: 99; display: none; pointer-events: none; box-sizing: border-box; border: 2px solid var(--focus); box-shadow: 0 0 0 3px rgba(255, 119, 60, 0.25); } /* its place and radius: Coach.tsx */

@@ -24,7 +24,8 @@ const cells = (r: Record<string, unknown>, cols: string[] = COLUMNS) =>
   cols.map((k) => { const d = DECIMALS[k as keyof RecordedNodule], v = r[k]; return v === null ? "" : d === undefined ? String(v) : (v as number).toFixed(d); }); // as before the study table, byte for byte
 
 export const toTSV = (r: RecordedNodule) => cells(r).join("\t");
-const q = (s: string) => (/[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s);
+const safe = (s: string) => (/^[=+\-@\t\r]/.test(s) && Number.isNaN(Number(s)) ? `'${s}` : s); // a cell a spreadsheet would run as a formula; numbers stay numbers
+const q = (raw: string) => { const s = safe(raw); return /[",\n\r]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; };
 export const toCSV = (rows: Record<string, unknown>[], cols: string[] = COLUMNS) => [cols, ...rows.map((r) => cells(r, cols))].map((l) => l.map(q).join(",")).join("\n") + "\n";
 
 /** Highest nodule number ever given per scan ("patient/series"), so a deleted number is never reused. */
