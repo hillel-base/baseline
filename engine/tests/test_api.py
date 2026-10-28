@@ -18,6 +18,22 @@ def test_slice_bytes(client):
     assert np.frombuffer(b, "<i2").reshape(64, 64)[32, 32] == 40
 
 
+def test_slice_post_answers_the_same_bytes_and_errors_as_the_get(client):
+    """POST /api/slice: one URL for every slice (a practice server's page then pays one CORS preflight, not one per slice)."""
+    get = lambda scan, z: client.get(f"/api/scans/{scan}/slices/{z}")
+    post = lambda body: client.post("/api/slice", json=body)
+    for z in (0, 4, 7):
+        g, p = get("RIDER-TEST01_test", z), post({"scan": "RIDER-TEST01_test", "z": z})
+        assert p.status_code == g.status_code == 200 and p.content == g.content and p.headers["content-type"] == g.headers["content-type"]
+    for scan, z in (("RIDER-TEST01_test", 8), ("RIDER-TEST01_test", -1), ("nope_test", 4)):
+        g, p = get(scan, z), post({"scan": scan, "z": z})
+        assert p.status_code == g.status_code == 404 and p.json() == g.json(), (scan, z)
+    assert post({"scan": "../RIDER-TEST01_test", "z": 4}).json() == {"detail": "unknown scan"}  # a path in the body is only an unknown id
+    for body in ({"scan": "RIDER-TEST01_test"}, {"z": 4}, {"scan": "RIDER-TEST01_test", "z": "4"}, {"scan": "RIDER-TEST01_test", "z": 4.5},
+                 {"scan": "RIDER-TEST01_test", "z": True}, {"scan": 1, "z": 4}):
+        assert post(body).status_code == 422, body
+
+
 def test_slice_out_of_range_is_404(client):
     assert client.get("/api/scans/RIDER-TEST01_test/slices/8").status_code == 404
 
@@ -472,7 +488,7 @@ def test_default_origin_is_the_hosted_app(dicom_series, runs_dir, monkeypatch):
 
 def test_info_has_its_four_fields_and_loads_no_scan(client):
     i = client.get("/api/info").json()
-    assert set(i) == {"commit", "model", "width_method", "device"}
+    assert set(i) == {"commit", "model", "width_method", "device", "picker"}  # picker: this engine serves /picker
     assert i["model"] == "nnInteractive 2.6.0 (CC BY-NC-SA 4.0)" and i["width_method"] == "edge" and i["commit"]
 
 

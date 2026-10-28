@@ -35,7 +35,7 @@ export function InstallView({ onBack }: { onBack: () => void }) {
       <button className="shell-btn" onClick={onBack}>Back to Measure</button>
       <h2 id="install-title">Run it on your computer</h2>
       <p>The tool can run on your own computer, with the same three public practice scans. Research use only.</p>
-      <p>It also opens CT folders on your computer: on the tool's own page now, and on this page once the Patients panel is ready.</p>
+      <p>It also opens CT folders on your computer, with Change folder… in the Patients panel: on the tool's own page, and on this page in Chrome or Firefox.</p>
       <ol>
         <li>{COMMANDS.map((c) => <Command key={c.cmd} {...c} />)}</li>
         <li>The first start installs the tool's packages and downloads the model weights and the three practice patients: about 1.8 GB on a Mac (about 3 GB more on Linux). It took about 5 minutes on a Mac with Apple silicon (our tests). Later starts are quick.</li>

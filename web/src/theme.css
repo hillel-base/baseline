@@ -142,3 +142,21 @@
 /* The Measure tool inside the shell (its own styles: measure.css). */
 .measure-sheet { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 body:has(.shell) { margin: 0; background: var(--bg-app); }
+
+/* Tutorial mode (Coach.tsx): the box, its arrow and a ring round the control it points at. Fixed over the page, in the focus orange so it never reads as
+   part of the tool; the ring takes no clicks. */
+.tut-card { position: fixed; z-index: 100; left: 0; top: 0; visibility: hidden; width: 320px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: var(--space-3) var(--space-4);
+  background: var(--bg-card); border: 1px solid var(--focus); border-radius: var(--radius-card); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55); color: var(--text); }
+.tut-card p { margin: 0 0 var(--space-2); text-wrap: pretty; }
+.tut-title { font-weight: var(--fw-semibold); }
+.tut-step { color: var(--focus); font-size: var(--fs-label); line-height: var(--lh-label); font-weight: var(--fw-medium); }
+.tut-acts { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+.tut-arrow { position: absolute; width: 12px; height: 12px; box-sizing: border-box; background: var(--bg-card); border: 1px solid var(--focus); transform: rotate(45deg); }
+.tut-card[data-side="below"] .tut-arrow { top: -7px; left: calc(var(--arrow) - 6px); border-right: 0; border-bottom: 0; }
+.tut-card[data-side="above"] .tut-arrow { bottom: -7px; left: calc(var(--arrow) - 6px); border-left: 0; border-top: 0; }
+.tut-card[data-side="left"] .tut-arrow { right: -7px; top: calc(var(--arrow) - 6px); border-left: 0; border-bottom: 0; }
+.tut-card[data-side="right"] .tut-arrow { left: -7px; top: calc(var(--arrow) - 6px); border-right: 0; border-top: 0; }
+.tut-card[data-side="inside"] .tut-arrow { display: none; }
+.tut-card.tut-offer { width: auto; max-width: none; display: flex; align-items: center; gap: var(--space-2); padding: 3px 4px 3px var(--space-3); white-space: nowrap; }
+.tut:focus { outline: none; } /* the region holds the focus after a keyboard Next (it has no box of its own); Tab then shows the buttons' own ring */
+.tut-ring { position: fixed; z-index: 99; display: none; pointer-events: none; border: 2px solid var(--focus); border-radius: var(--radius-toggle); box-shadow: 0 0 0 3px rgba(255, 119, 60, 0.25); }

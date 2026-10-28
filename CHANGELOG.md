@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.1 (2026-10-27)
+
+The Patients panel, an optional nodule finder, and faster scrolling on the practice server. Research use only.
+
+**Patients panel**
+- The Patients button in the top bar, in place of the scan list, opens a panel: the patients on the left, with a search box, and the chosen patient's scans by date on the right (Baseline, then each Follow-up with its day count). Each scan shows how many nodules this page has recorded on it.
+- "‹ Baseline" and "Follow-up ›" beside the button, or Alt+← and Alt+→, open the patient's other scans.
+- The panel groups the scans by their DICOM headers (patient, study date, series), in any folder layout, and lists axial CT images only.
+- Folders open through the panel's "Change folder…". The separate "Open a CT folder…" button is gone.
+- On the page on your computer, the panel shows patient names and dates. On the hosted page it shows inside a frame that the engine on your computer draws (Chrome and Firefox), so the hosted page gets scan codes only, never a name or a date. On a practice server it lists the public practice patients as "Practice patient 1", "2" and so on.
+
+**Nodule finder (optional)**
+- "Find nodules" over the image lists suggestions to check, not findings. They show as numbered rings on the image and ticks on the slice bar. Measure starts an outline at a suggestion. Not a nodule strikes it out, and Undo takes that back.
+- The finder is a separate program in `finder/`, under AGPL-3.0, with its own licence and notices. It is off unless you turn it on (see the README).
+- In our tests it found about 7 in 10 of the nodules that radiologists marked on public screening scans, with about 2 extra marks per scan, and it can miss large tumours. Read the whole scan as usual.
+
+**Practice server**
+- Faster scrolling: the page asks for every slice at one address, so the browser checks that address once every 10 minutes instead of once per slice.
+- When the server is paused, the page names the next step: the Demo to try the tool, or your own computer for your own scans.
+- A sleeping server shows as starting, and the page says it takes about 1 minute.
+- The page asks the first server first, and the second only when the first cannot serve.
+- After 15 minutes without a click, the page stops asking the practice servers. Try again asks once more.
+
+**Results**
+- The results, and the scripts and run tables that produced them, are in `results/`.
+
 ## 0.1.0 (2026-10-27)
 
 The first public version. Research use only.
@@ -34,5 +60,5 @@ The first public version. Research use only.
 - The scans stay on your computer. Only numbers and short labels are saved. The hosted page gets a code for each scan, never a folder or patient name (the public practice patients aside). Folders can be opened only from the page on your computer.
 - In Safari, the hosted page says that it cannot reach the engine on your computer, and offers the alternatives.
 
-**Not included yet**
-- The nodule finder (an optional detector that suggests where to click).
+**Not included in 0.1.0**
+- The nodule finder (an optional detector that suggests where to click): added in 0.1.1.

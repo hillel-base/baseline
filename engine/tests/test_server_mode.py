@@ -74,7 +74,7 @@ def test_no_token_or_refused_token_is_401_with_text(srv, runs_dir, headers):
     calls = [srv.get("/api/scans", headers=headers), srv.get(SCAN, headers=headers),
              srv.post(NODULES, json=CLICK, headers=headers),
              srv.post("/api/nodule/clicks", json=dict(scan="RIDER-TEST01_test", nodule=1, positive=True, **CLICK), headers=headers),
-             srv.post("/api/session/release", headers=headers)]
+             srv.post("/api/session/release", headers=headers), srv.post("/api/slice", json=dict(scan="RIDER-TEST01_test", z=4), headers=headers)]
     for r in calls:
         assert r.status_code == 401 and r.json() == {"detail": SIGN_IN}
     r = srv.get("/api/scans", headers={"Origin": ORIGIN, **headers})
@@ -101,13 +101,16 @@ def test_valid_token_reaches_practice_scans_only(srv, dicom_series):
     assert [s["patient"] for s in srv.get("/api/scans", headers=A).json()] == ["RIDER-TEST01"]
     assert srv.get(SCAN, headers=A).status_code == 200
     other = "/api/scans/RIDER-TEST02_test"
-    for r in (srv.get(other, headers=A), srv.get(other + "/slices/4", headers=A), srv.post(other + "/nodules", json=CLICK, headers=A),
+    for r in (srv.get(other, headers=A), srv.get(other + "/slices/4", headers=A), srv.post("/api/slice", json=dict(scan="RIDER-TEST02_test", z=4), headers=A),
+              srv.post(other + "/nodules", json=CLICK, headers=A),
               srv.get(SCAN + "/map?from=RIDER-TEST02_test&z=4&y=32&x=32", headers=A),
               srv.get(other + "/map?from=RIDER-TEST01_test&z=4&y=32&x=32", headers=A),
               srv.post("/api/events", json={"action": "zoom", "scan": "RIDER-TEST02_test"}, headers=A),
               srv.get("/api/scans/F-0123abcd", headers=A)):
         assert r.status_code == 404
     assert srv.post(NODULES, json=CLICK, headers=A).status_code == 200
+    s = srv.post("/api/slice", json=dict(scan="RIDER-TEST01_test", z=4), headers=A)
+    assert s.status_code == 200 and s.content == srv.get(SCAN + "/slices/4", headers=A).content
 
 
 def test_practice_patients_default_to_the_three_development_patients(server_env, clock, dicom_series, runs_dir, monkeypatch):
@@ -194,7 +197,7 @@ def test_local_mode_is_unchanged_without_LUNG_SERVER(dicom_series, runs_dir, mon
     monkeypatch.delenv("SPACE_HOST", raising=False)
     monkeypatch.setenv("LUNG_BROWSE_ROOT", str(dicom_series))
     c = make(dicom_series, runs_dir, verify=lambda t: None)  # a refusing verifier is never asked
-    assert set(c.get("/api/info").json()) == {"commit", "model", "width_method", "device"}
+    assert set(c.get("/api/info").json()) == {"commit", "model", "width_method", "device", "picker"}
     assert c.get("/api/scans").status_code == 200 and c.post(NODULES, json=CLICK).status_code == 200
     assert c.get("/api/folders").status_code == 200
     assert c.post("/api/session/release").status_code in (404, 405)
@@ -249,6 +252,17 @@ def test_space_host_is_trusted(server_env, clock, dicom_series, runs_dir, monkey
     assert c.get("/api/info", headers={"Host": "evil.example"}).status_code == 400
     assert c.get("/api/scans", headers={"Host": "evil.example", **A}).status_code == 400  # the host check comes before the sign-in
     assert c.get("/api/info").status_code == 200  # localhost still works
+
+
+def test_slice_route_preflight_is_kept_ten_minutes_or_more(srv):
+    """One preflight covers every slice: the browser keeps it max-age seconds per URL (Chrome caps it at 2 hours)."""
+    r = srv.options("/api/slice", headers={"Origin": ORIGIN, "Access-Control-Request-Method": "POST",
+                                           "Access-Control-Request-Headers": "authorization, content-type"})
+    assert r.status_code == 200 and r.headers["access-control-allow-origin"] == ORIGIN
+    assert int(r.headers["access-control-max-age"]) >= 600
+    assert "POST" in r.headers["access-control-allow-methods"]
+    assert {"authorization", "content-type"} <= {h.strip().lower() for h in r.headers["access-control-allow-headers"].split(",")}
+    assert srv.get("/api/info").json()["server"]["busy"] is False  # a preflight takes no hold
 
 
 def test_authorization_header_allowed_in_cors_preflight(srv):
@@ -363,6 +377,9 @@ def test_every_route_but_home_and_info_refuses_without_a_sign_in(server_env, clo
     assert srv.get("/").text == "OK" and srv.get("/?x=1").text == "OK"
     routes = [(r.path, sorted(r.methods - {"HEAD"})[0]) for r in srv.app.routes if hasattr(r, "methods") and r.path not in ("/", "/api/info")]
     assert len(routes) >= 10  # the scan, slice, nodule, record, events, map and session routes, the docs among them
+    assert ("/api/slice", "POST") in routes  # the one-URL slice route is walked too
+    r = srv.post("/api/slice", json=dict(scan="RIDER-TEST01_test", z=4))  # with a valid body: the sign-in comes first
+    assert r.status_code == 401 and b"RIDER" not in r.content
     for path, method in routes:
         url = path.replace("{scan_id}", "RIDER-TEST01_test").replace("{to}", "RIDER-TEST01_test").replace("{z}", "4")
         r = srv.request(method, url)
@@ -387,3 +404,18 @@ def test_server_mode_refuses_to_start_with_another_allowed_origin(server_env, di
 def test_server_mode_starts_with_our_exact_origin(server_env, clock, dicom_series, runs_dir, monkeypatch):
     monkeypatch.setenv("LUNG_ALLOWED_ORIGIN", "https://lung-measure.base44.app")
     assert make(dicom_series, runs_dir).get("/").text == "OK"
+
+
+def test_a_practice_server_gzips_slices_and_the_local_engine_does_not(srv, server_env, dicom_series, runs_dir, monkeypatch):
+    # Measured on the real server (2026-10-28): each slice is 512 KB of raw int16 and the download through Hugging Face's proxy
+    # dominates; gzip cuts it by about 45%. The local engine answers over loopback, where compression only costs time: unchanged.
+    gz = {**A, "Accept-Encoding": "gzip"}
+    post = srv.post("/api/slice", json=dict(scan="RIDER-TEST01_test", z=4), headers=gz)
+    get = srv.get(SCAN + "/slices/4", headers=gz)
+    for r in (post, get):
+        assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip" and "accept-encoding" in r.headers.get("vary", "").lower()
+    monkeypatch.delenv("LUNG_SERVER")
+    local = TestClient(create_app(data_root=dicom_series, segmenter_factory=BallSegmenter, runs_dir=runs_dir), base_url="http://localhost")
+    plain = local.get(SCAN + "/slices/4", headers={"Accept-Encoding": "gzip"})
+    assert plain.status_code == 200 and "content-encoding" not in plain.headers
+    assert post.content == get.content == plain.content  # the client decodes it: the same int16 bytes

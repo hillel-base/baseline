@@ -1,6 +1,18 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
+/** The Patients button: it replaces the Scan drop-down on the engine's own page. */
+const picker = (page: Page) => page.locator('button[aria-haspopup="dialog"]');
+/** Opens a data-folder scan as a user does: the Patients button, the patient, the scan's Open (test is the Baseline, retest the Follow-up). */
+async function openScan(page: Page, id: string) {
+  const [patient, series] = [id.slice(0, id.lastIndexOf("_")), id.slice(id.lastIndexOf("_") + 1)];
+  await picker(page).click();
+  const sheet = page.getByRole("dialog", { name: "Patients" });
+  await sheet.getByRole("button", { name: new RegExp(`^${patient}`) }).click();
+  await sheet.getByRole("button", { name: new RegExp(`^Open ${series === "test" ? "Baseline" : "Follow-up"}`) }).click();
+  await expect(sheet).toHaveCount(0);
+}
+
 test.use({ viewport: { width: 1280, height: 720 }, permissions: ["clipboard-read", "clipboard-write"] });
 /** a click, stroke or axis drag on the image counts only once it shows the indicator's slice; wait for that, as a person would. */
 const imageReady = (page: Page) => expect(page.getByText(/^Loading (image|slice index) \d+…$/)).toHaveCount(0, { timeout: 30_000 });
@@ -8,7 +20,7 @@ test("while the image is not yet the indicator's slice, the cue shows and a clic
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   await imageReady(page); // the first image and its neighbours are in
@@ -47,7 +59,7 @@ test("a press made during the cue does not become a click when it is released af
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   await imageReady(page);
@@ -81,7 +93,7 @@ test("a Paint stroke in progress when the wheel changes the image is cancelled a
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
   await page.reload();
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -123,7 +135,7 @@ test("slice 1: pick a scan and scroll it", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("banner").getByRole("img", { name: "Baseline, lung nodule measurement on CT" })).toBeVisible();
   await expect(page).toHaveTitle("Baseline");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const read = async () => {
@@ -168,7 +180,7 @@ test("slice 2: one click outlines and measures, an air click is refused", async 
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1280, height: 900 }); // canvas > 512 css px, so every voxel is at least one whole pixel wide
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   // Expert mask's deepest voxel (RIDER-1286684383_test): z = 161 (Image 104), y = 321, x = 330; expert volume 7.15 mL.
@@ -224,7 +236,7 @@ test("slice 2: one click outlines and measures, an air click is refused", async 
 test("slice 3: a Shift+click removes, Undo restores", async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -303,7 +315,7 @@ test("slice 4: record, table, export, copy, screenshot, discard", async ({ page 
   const before = lines().length;
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -368,10 +380,10 @@ test("slice 4: record, table, export, copy, screenshot, discard", async ({ page 
   await expect(table.getByRole("row")).toHaveCount(2); // still open after a reload: open or folded is remembered
   await expect(table).toContainText("RIDER-1286684383");
 
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   await expect(counter).toBeVisible({ timeout: 60_000 });
   await outlineOne();
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_retest");
+  await openScan(page, "RIDER-1286684383_retest");
   await expect(page.getByText("The unrecorded outline was discarded.")).toBeVisible();
   await expect.poll(() => lines().slice(before).filter((e) => ["record", "export_csv", "screenshot", "copy_row", "discard"].includes(e.action)).map((e) => e.action))
     .toEqual(["record", "export_csv", "screenshot", "copy_row", "copy_row", "discard"]); // Copy row from the table, then from the panel
@@ -397,7 +409,7 @@ test("slice 4: record, table, export, copy, screenshot, discard", async ({ page 
   const restoreBtn = page.getByRole("button", { name: "Restore the cleared rows (1)" });
   await expect(restoreBtn).toBeVisible(); // survives the reload; the rows themselves stay out of view
   console.log(`slice 4 clear event: ${JSON.stringify(lines().slice(before).find((e) => e.action === "clear_table"))}`);
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   await expect(counter).toBeVisible({ timeout: 60_000 });
   await outlineOne();
   await panel.getByRole("button", { name: "Record nodule" }).click();
@@ -443,7 +455,7 @@ test("start over clears the outline, the next click starts again", async ({ page
   const before = lines().length;
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -480,7 +492,7 @@ test("zoom to area, a click on the zoomed image hits the right voxel, the view s
   const before = lines().length;
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -559,7 +571,7 @@ test("Ctrl+wheel zooms about the cursor, Space+drag pans, a click afterwards is 
   const before = lines().length;
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -630,7 +642,7 @@ test("keys A and R set the mode, Esc during a zoom-area drag sends nothing, Star
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -706,7 +718,7 @@ test("keys A and R set the mode, Esc during a zoom-area drag sends nothing, Star
 
 test("engine stopped: the panel says so and no outline is drawn", async ({ page }) => {
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
   await page.route("**/nodules", (r) => r.abort());
   await page.locator('canvas[aria-label="CT slice"]').click();
@@ -725,7 +737,7 @@ test("polish: Enter records, U undoes, Delete asks once more and Undo puts the r
   await page.goto("/");
   await page.evaluate(() => localStorage.clear()); // a fresh table: nodule numbers start at 1
   await page.reload();
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: /^Recorded nodules/ }).click(); // open the table (it starts folded); it then keeps a fixed height
@@ -854,7 +866,7 @@ test("Undo in the green box removes the local row as Delete does, logs undo_reco
   await page.goto("/");
   await page.evaluate(() => localStorage.clear()); // a fresh table: nodule numbers start at 1
   await page.reload();
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: /^Recorded nodules/ }).click();
@@ -891,29 +903,6 @@ test("Undo in the green box removes the local row as Delete does, logs undo_reco
   await expect(table.getByRole("row")).toHaveCount(2);
 });
 
-test("open a CT folder: browse to it, open the series, one click outlines", async ({ page }) => {
-  test.setTimeout(180_000);
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Open a CT folder…" }).click();
-  const panel = page.getByRole("region", { name: "Open a CT folder" });
-  await panel.getByRole("button", { name: "scan", exact: true }).click();
-  await expect(panel.getByText(/265 images/)).toBeVisible();
-  await panel.getByRole("button", { name: /^Open .*265 images/ }).click();
-  const counter = page.getByText(/^Image \d+ \/ 265$/);
-  await expect(counter).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByLabel("Scan")).toHaveValue(/^F-[0-9a-f]{8}$/);
-  const [z, y, x] = [161, 321, 330];
-  const id = await page.getByLabel("Scan").inputValue();
-  const scan = await (await page.request.get(`/api/scans/${id}`)).json();
-  await page.getByRole("slider").fill(String(scan.instance_numbers[z]));
-  const canvas = page.locator('canvas[aria-label="CT slice"]');
-  await imageReady(page);
-  const box = (await canvas.boundingBox())!;
-  await page.mouse.click(Math.round(box.x + ((x + 0.5) / 512) * box.width), Math.round(box.y + ((y + 0.5) / 512) * box.height));
-  await expect(page.getByRole("region", { name: "Measurements" })).toContainText(/mL/, { timeout: 120_000 });
-});
-
 test("slice 5: a Paint stroke beside the outline and its Erase, a dragged long-axis end, the row keeps painted and axes_edited", async ({ page }) => {
   test.setTimeout(240_000);
   const eventsFile = "test-results/engine-runs/events.jsonl";
@@ -923,7 +912,7 @@ test("slice 5: a Paint stroke beside the outline and its Erase, a dragged long-a
   await page.goto("/");
   await page.evaluate(() => localStorage.clear()); // a fresh table: the row is nodule 1
   await page.reload();
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -1048,7 +1037,7 @@ test("slice 5: an axis end is dragged only in Axes mode; Add-mode presses there 
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -1147,7 +1136,7 @@ const followup = async (page: import("@playwright/test").Page) => {
   const before = lines().length;
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ \d+$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -1169,7 +1158,7 @@ const followup = async (page: import("@playwright/test").Page) => {
   const file1: string = (await (await recorded).json()).outline_file;
   await expect(panel).toContainText("Recorded as nodule 1.");
 
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_retest");
+  await openScan(page, "RIDER-1286684383_retest");
   const retest = await (await page.request.get("/api/scans/RIDER-1286684383_retest")).json();
   await expect(earlier).toContainText(/N1 · Image \d+ on test/, { timeout: 60_000 });
   const mapped = page.waitForResponse((r) => r.url().includes("/map?"), { timeout: 120_000 });
@@ -1273,7 +1262,7 @@ test("Add, Paint, Undo, Start over and Record keep their place: first outline, e
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openScan(page, "RIDER-1286684383_test");
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const scan = await (await page.request.get("/api/scans/RIDER-1286684383_test")).json();
@@ -1304,4 +1293,174 @@ test("Add, Paint, Undo, Start over and Record keep their place: first outline, e
   await expect(panel.getByRole("alert")).toBeVisible({ timeout: 30_000 });
   expect(await places()).toEqual(idle);
   await expect(panel.getByRole("button", { name: "Start over (S)" })).toBeInViewport({ ratio: 1 }); // in view at 1440 x 900, no scrolling
+});
+
+// The open sheet keeps the Measure keys from the outline; Alt+←/→ is never the browser's; the focus.
+test("Patients panel: the open sheet keeps Enter, U, S, N and M from the outline; Alt+← on a Baseline stays the page's; the focus goes in, Tab stays in, and only a keyboard opener gets it back", async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await openScan(page, "RIDER-1286684383_test");
+  const counter = page.getByText(/^Image \d+ \/ 265$/);
+  await expect(counter).toBeVisible({ timeout: 60_000 });
+  // On a Baseline (no previous scan) and on a held key, Alt+← is still the page's: never the browser's Back
+  await page.evaluate(() => { const w = window as unknown as { kept: boolean[] }; w.kept = []; window.addEventListener("keydown", (e) => { if (e.altKey && e.key === "ArrowLeft") w.kept.push(e.defaultPrevented); }); }); // added last: it sees the page's answer
+  const at = page.url();
+  await page.keyboard.press("Alt+ArrowLeft");
+  await page.keyboard.down("Alt");
+  for (let i = 0; i < 3; i++) await page.keyboard.down("ArrowLeft"); // held: repeats
+  await page.keyboard.up("ArrowLeft");
+  await page.keyboard.up("Alt");
+  expect(await page.evaluate(() => (window as unknown as { kept: boolean[] }).kept)).toEqual([true, true, true, true]);
+  expect(page.url()).toBe(at);
+
+  const scan = await (await page.request.get("/api/scans/RIDER-1286684383_test")).json();
+  await page.getByRole("slider").fill(String(scan.instance_numbers[161]));
+  await expect(counter).toHaveText(`Image ${scan.instance_numbers[161]} / 265`);
+  await imageReady(page);
+  const box = (await page.locator('canvas[aria-label="CT slice"]').boundingBox())!;
+  await page.mouse.click(Math.round(box.x + (330.5 / 512) * box.width), Math.round(box.y + (321.5 / 512) * box.height));
+  const panel = page.getByRole("region", { name: "Measurements" });
+  await expect(panel).toContainText(/Volume \d+\.\d\d mL/, { timeout: 60_000 });
+  const volume = (await panel.textContent())!.match(/Volume \S+ mL/)![0];
+  const sent: string[] = [];
+  page.on("request", (r) => { if (r.method() === "POST") sent.push(new URL(r.url()).pathname); }); // a click, Undo, Record, or a logged discard
+
+  // With the mouse: the focus goes into the sheet; after a click on a row the focus is on the page, and still no key reaches the outline
+  await picker(page).click();
+  const sheet = page.getByRole("dialog", { name: "Patients" });
+  await expect(sheet).toHaveAttribute("aria-modal", "true");
+  await expect(sheet.getByRole("searchbox", { name: "Search patients" })).toBeFocused();
+  await sheet.getByRole("button", { name: /^RIDER-2541949645/ }).click();
+  await expect(page.locator("body")).toBeFocused();
+  for (const k of ["Enter", "u", "s", "n", "m"]) await page.keyboard.press(k);
+  await page.waitForTimeout(500);
+  expect(sent).toEqual([]);
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+  await expect(panel).toContainText(volume); // the outline is still on the page, not recorded, undone or discarded
+  await expect(panel).not.toContainText("The unrecorded outline was discarded.");
+  await expect(panel.getByRole("button", { name: "Record nodule (Enter)" })).toBeEnabled();
+  await expect(page.locator("body")).toBeFocused(); // opened with the mouse: no focus left on the button
+
+  // From the keyboard: Tab wraps inside the sheet; Esc gives the focus back to the button
+  await picker(page).focus();
+  await page.keyboard.press("Enter");
+  const search = sheet.getByRole("searchbox", { name: "Search patients" });
+  await expect(search).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(sheet.getByRole("button", { name: "Change folder…" })).toBeFocused(); // the sheet's last control
+  await page.keyboard.press("Tab");
+  await expect(search).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(picker(page)).toBeFocused();
+  // A click beside a keyboard-opened sheet is a mouse click: it leaves no focus on the button
+  await page.keyboard.press("Enter");
+  await expect(search).toBeFocused();
+  await page.mouse.click(box.x + 20, box.y + box.height / 2);
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator("body")).toBeFocused();
+  // after Open the focus is off the button, so Enter records again
+  await picker(page).focus();
+  await page.keyboard.press("Enter");
+  await sheet.getByRole("button", { name: /^Open Baseline/ }).focus(); // the scan already open: Open only closes the sheet
+  await page.keyboard.press("Enter");
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator("body")).toBeFocused();
+  expect(sent).toEqual([]);
+  await page.keyboard.press("Enter");
+  await expect(panel).toContainText("Recorded as nodule 1.");
+  expect(sent).toContain("/api/nodule/record");
+});
+
+// The Patients panel replaces the drop-down on the engine's own page. Last in this file: it sets the study folder of this run's engine.
+test("Patients panel: open it, search, open a scan, Alt+→ opens the follow-up, the button says where you are and keeps its width, Esc closes; Change folder… sets the study folder, whose scan gets the finder's marks and outlines with one click", async ({ page }) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.locator("select")).toHaveCount(0); // no drop-down: the button took its place
+  await expect(picker(page)).toHaveText(/^Choose a scan/);
+  const width = (await picker(page).boundingBox())!.width;
+  await picker(page).click();
+  const sheet = page.getByRole("dialog", { name: "Patients" });
+  await expect(sheet.getByText(/^Patients · \d+$/)).toBeVisible();
+  await expect(sheet).toContainText("Names and dates are shown by your computer; Base44 receives only codes.");
+  await expect(sheet).toContainText("No study folder chosen yet.");
+  await sheet.getByRole("searchbox", { name: "Search patients" }).fill("1286684383");
+  await expect(sheet.getByText("Patients · 1", { exact: true })).toBeVisible();
+  await expect(sheet).toContainText("RIDER-12866843832 scans, oldest first");
+  const items = sheet.getByRole("listitem");
+  await expect(items.nth(0)).toContainText(/^Baseline · \d+ \w{3} \d{4}Test scannot measured yet/);
+  await expect(items.nth(1)).toContainText(/^Follow-up · \d+ \w{3} \d{4} · same dayRetest scannot measured yet/);
+  await sheet.getByRole("button", { name: /^Open Baseline/ }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
+  await expect(picker(page)).toHaveText(/^RIDER-1286684383 · Baseline · \d+ \w{3} \d{4}/);
+  await expect(page.getByRole("button", { name: "Follow-up ›" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^‹/ })).toHaveCount(0);
+  const at = page.url();
+  await page.keyboard.press("Alt+ArrowRight");
+  await expect(picker(page)).toHaveText(/^RIDER-1286684383 · Follow-up · \d+ \w{3} \d{4} · same day/);
+  await expect(page.getByText(/^Image \d+ \/ 269$/)).toBeVisible({ timeout: 60_000 });
+  await imageReady(page); // the panel opens a scan as the drop-down did, so the loading cue's rules hold; wait for the image before any click
+  await expect(page.getByRole("button", { name: "‹ Baseline" })).toBeVisible();
+  expect((await picker(page).boundingBox())!.width).toBe(width); // the button keeps its width
+  await picker(page).click();
+  await expect(items.filter({ hasText: "open now" })).toHaveText(/^Follow-up .*Retest scan · open now/);
+  await expect(sheet.getByRole("button", { name: /^Open Follow-up/ })).toHaveClass(/primary/);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+  await page.keyboard.press("Alt+ArrowLeft"); // the previous scan, never the browser's Back
+  await expect(picker(page)).toHaveText(/^RIDER-1286684383 · Baseline/);
+  expect(page.url()).toBe(at);
+  const starts: string[] = []; // a click on the image beside the sheet only closes it: no first click reaches the model
+  page.on("request", (r) => { if (r.url().endsWith("/nodules")) starts.push(r.url()); });
+  await picker(page).click();
+  const image = (await page.locator('canvas[aria-label="CT slice"]').boundingBox())!;
+  await page.mouse.click(image.x + 20, image.y + image.height / 2);
+  await expect(sheet).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(starts).toEqual([]);
+
+  // Change folder…: the folder browser in the sheet; the browse root itself is refused with the engine's own words; a folder inside it is read and listed
+  await picker(page).click();
+  await sheet.getByRole("button", { name: "Change folder…" }).click();
+  const browser = sheet.getByRole("region", { name: "Choose the study folder" });
+  await expect(browser.getByRole("button", { name: "scan", exact: true })).toBeVisible();
+  await browser.getByRole("button", { name: "Choose this folder" }).click();
+  await expect(browser.getByRole("alert")).toHaveText("Choose a folder inside the allowed area, not the whole area itself.");
+  await browser.getByRole("button", { name: "scan", exact: true }).click();
+  await expect(browser).toContainText("Folder: /scan");
+  await browser.getByRole("button", { name: "Choose this folder" }).click();
+  await expect(sheet).toContainText("Folder: /scan", { timeout: 30_000 }); // the panel again, read from the new folder
+  await expect(sheet.getByRole("button", { name: "Change folder…" })).toBeVisible();
+  await expect(sheet.getByRole("searchbox", { name: "Search patients" })).toHaveValue("");
+  await sheet.getByRole("button", { name: /^318903/ }).click(); // the copy's PatientName (RIDER's anonymised one)
+  await expect(sheet).toContainText("3189031 scan");
+  await page.screenshot({ path: "e2e/screenshots/patients-panel-local.png" });
+
+  // The chosen folder's scan (a copy of RIDER-1286684383 ct_test), the only way to open a folder since the top bar's folder button went:
+  // the finder gets the data scan's marks, and one click outlines it
+  const opened = page.waitForResponse((r) => /\/api\/scans\/F-[0-9a-f]{8}$/.test(r.url()));
+  await sheet.getByRole("button", { name: /^Open / }).click();
+  const scan = await (await opened).json();
+  await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
+  const asked = page.waitForResponse((r) => r.url().endsWith(`/api/scans/${scan.id}/candidates`) && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Find nodules" }).click();
+  const marks = await (await asked).json();
+  await expect(page.getByRole("region", { name: "Suggestions to check" }).getByRole("listitem")).toHaveCount(4);
+  const data = await page.request.post("/api/scans/RIDER-1286684383_test/candidates"); // the same series from the data folder
+  expect(data.status()).toBe(200);
+  expect(marks).toEqual(await data.json());
+  expect(marks.map((c: { image: number }) => c.image)).toEqual([161, 100, 212, 102].map((k) => scan.instance_numbers[k]));
+  await page.keyboard.press("Escape"); // the list closes: the next press on the image is a click
+  const [z, y, x] = [161, 321, 330];
+  await page.getByRole("slider").fill(String(scan.instance_numbers[z]));
+  await imageReady(page);
+  const box = (await page.locator('canvas[aria-label="CT slice"]').boundingBox())!;
+  await page.mouse.click(Math.round(box.x + ((x + 0.5) / 512) * box.width), Math.round(box.y + ((y + 0.5) / 512) * box.height));
+  await expect(page.getByRole("region", { name: "Measurements" })).toContainText(/mL/, { timeout: 120_000 });
 });

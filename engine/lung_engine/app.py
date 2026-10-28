@@ -1,8 +1,10 @@
+import html
 import json
 import logging
 import os
 import re
 import secrets
+import shlex
 import shutil
 import threading
 import time
@@ -12,18 +14,21 @@ from typing import Annotated, Callable, Literal
 
 
 import anyio
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import APIRouter, Body, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, model_validator
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import signin
+from .candidates import CUT, FinderError, FinderMissing, NoFinder, SubprocessFinder, to_voxels
 from .followup import map_index, register
 from .events import REPO, EventLog
 from .outline import SNAP_HU, AlreadyRecorded, Empty, NoChange, NoNodule, Recorded, NothingToUndo, OnAir, OutlineSession, OutsideBox, write_mask
-from .scans import FOLDER_ID, Scan, baseline_days, folder_series, head_dir, list_scans, load_folder_scan, load_scan, valid_scan_id
+from .scans import FOLDER_ID, Scan, baseline_days, folder_series, head_dir, list_scans, load_folder_scan, load_scan, study_date, valid_scan_id
+from .study_index import TooManyFiles, display_name, index_folder, label, timeline
 
 
 class Point(BaseModel):
@@ -39,6 +44,11 @@ class Which(BaseModel):  # the nodule a correction or Undo is for, as the page l
 
 class Click(Point, Which):
     positive: bool
+
+
+class SliceReq(BaseModel):  # POST /api/slice: one URL for every slice, so a practice server's page pays one CORS preflight, not one per slice
+    scan: str
+    z: StrictInt
 
 
 YX = tuple[Annotated[float, Field(allow_inf_nan=False)], Annotated[float, Field(allow_inf_nan=False)]]  # voxel row, column; decimals allowed
@@ -74,7 +84,7 @@ class OpenFolder(BaseModel):
 class UiEvent(BaseModel):  # UI-only actions the page reports; nothing else gets into the log
     model_config = ConfigDict(extra="forbid")
     action: Literal["copy_row", "export_csv", "screenshot", "discard", "delete_row", "clear_table", "restore_table", "start_over", "zoom", "zoom_fit", "zoom_area", "undo_delete_row",
-                    "followup_confirm", "followup_moved", "undo_record", "save_failed"]
+                    "followup_confirm", "followup_moved", "undo_record", "save_failed", "candidate_accept", "candidate_reject", "undo_candidate_reject"]
     scan: str | None = Field(None, max_length=100)
     nodule: StrictInt | None = Field(None, ge=0)
     rows: StrictInt | None = Field(None, ge=0)
@@ -84,11 +94,13 @@ class UiEvent(BaseModel):  # UI-only actions the page reports; nothing else gets
     distance_mm: StrictFloat | None = Field(None, ge=0)  # followup_moved: the proposal to the click
     undoes: str | None = Field(None, max_length=200)  # undo_record: the outline_file of the record it removes
     reason: str | None = Field(None, max_length=60, pattern=r"^[\w .-]+$")  # save_failed: the error's HTTP status or class only, never the payload or an email
+    rank: StrictInt | None = Field(None, ge=1, le=500)  # candidate_accept, candidate_reject and undo_candidate_reject: place in the list and its score
+    score: StrictInt | StrictFloat | None = Field(None, ge=0, le=1)
 
     @model_validator(mode="after")
     def followup_fields(self):  # the evaluation reads these lines: a follow-up, undo_record or save_failed event without its fields is refused
         need = {"followup_confirm": ("scan", "follows"), "followup_moved": ("scan", "follows", "distance_mm"), "undo_record": ("scan", "nodule", "undoes"),
-                "save_failed": ("reason",)}.get(self.action, ())
+                "save_failed": ("reason",), **dict.fromkeys(("candidate_accept", "candidate_reject", "undo_candidate_reject"), ("scan", "rank", "score"))}.get(self.action, ())
         if any(getattr(self, k) is None for k in need):
             raise ValueError(f"{self.action} needs {', '.join(need)}")
         return self
@@ -109,7 +121,14 @@ AXES_OUTSIDE = "Those axis end points are outside the working box of this nodule
 FOLDERS_LOCAL_ONLY = "Folders open only on the page the engine serves on this computer."
 GONE = "This nodule is no longer open in the engine (another tab or a restart). Click the nodule to start again."
 SIGN_IN = "Sign in to use the practice server."
+FINDER_FAILED = "The finder did not run. The engine's log has the details."
 PRACTICE = "RIDER-2541949645,RIDER-1286684383,RIDER-2619750334"  # the 3 development patients
+BY_ENV = "The study folder is set by LUNG_STUDY_DIR on this computer."
+STUDY_GONE = "The study folder cannot be found. Choose it again with Change folder…"
+STUDY_UNREADABLE = "The study folder cannot be read. Choose it again with Change folder…"
+STUDY_FAILED = "The study folder could not be read."
+MAX_STUDY_FILES = 20_000  # files read in one GET /api/patients; cache hits do not count
+PICKER = "/picker"  # the Patients panel alone, for the hosted page's frame; exactly this path (picker.html itself, or a case variant, gets frame-ancestors 'none')
 
 
 def cross_origin(request: Request) -> bool:
@@ -120,7 +139,11 @@ def cross_origin(request: Request) -> bool:
 
 def create_app(data_root: Path | None = None, segmenter_factory: Callable | None = None,
                runs_dir: Path | None = None, width: str | None = None, browse_root: Path | None = None,
-               verify_user: Callable[[str], dict | None] | None = None) -> FastAPI:
+               verify_user: Callable[[str], dict | None] | None = None, finder=None) -> FastAPI:
+    copilot_on = os.environ.get("LUNG_COPILOT", "on") != "off"
+    finder_lock = threading.Lock()  # apart from the outline session: a running finder never blocks clicks
+    finding = {"scan": None}  # the scan the finder runs on now
+    candidates: dict[str, list[dict]] = {}
     width = width or os.environ.get("LUNG_WIDTH", "edge")
     if width not in ("edge", "centre"):
         raise ValueError("LUNG_WIDTH must be edge or centre.")
@@ -128,18 +151,31 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
     runs_dir = Path(runs_dir or os.environ.get("LUNG_RUNS_DIR", REPO / "runs"))
     browse_root = Path(browse_root or os.environ.get("LUNG_BROWSE_ROOT") or Path.home()).resolve()
     folder_file = runs_dir / "folder_scans.json"  # scan id -> [folder, series hash]; read by the engine only, never logged
+    study_file = runs_dir / "study_folder.json"  # {"path": the study folder the panel set, relative to browse_root}
+    study_env = os.environ.get("LUNG_STUDY_DIR")  # when set, it wins over the panel's choice
+    study_scans_file = runs_dir / "study_scans.json"  # F- id -> {"patient": the index's patient_key, "day": the timeline's day}; local only, never logged
+    over_cap: set[Path] = set()  # study roots that went over MAX_STUDY_FILES in this run: answered at once, never read again
+    too_many = lambda: f"The study folder holds more than {MAX_STUDY_FILES:,} files. Choose a smaller folder."
+    root_itself = ("Choose a folder inside your home folder, not the home folder itself." if browse_root == Path.home().resolve()
+                   else "Choose a folder inside the allowed area, not the whole area itself.")
+    finder = finder or (SubprocessFinder(runs_dir, shlex.split(os.environ.get("LUNG_FINDER_TEST_COMMAND", "")) or None) if os.environ.get("LUNG_FINDER") == "subprocess" else NoFinder())
     events = EventLog(runs_dir / "events.jsonl")
     try:
         folder_scans: dict[str, list[str]] = json.loads(folder_file.read_text()) if folder_file.exists() else {}
     except ValueError:  # not JSON: start empty (the next open rewrites the file)
         folder_scans = {}
         events.log("folder_scans_unreadable")
+    try:
+        study_scans: dict[str, dict] = json.loads(study_scans_file.read_text()) if study_scans_file.exists() else {}
+    except ValueError:  # damaged: the next GET /api/patients writes it again
+        study_scans = {}
     cache: OrderedDict[str, Scan] = OrderedDict()  # last 2 scans stay in memory
     lock = threading.Lock()  # FastAPI runs sync routes in a threadpool
     if segmenter_factory is None:
         from .nni import NNISegmenter  # imports torch; the tests pass a fake instead
         segmenter_factory = NNISegmenter
     recorded_files: dict[tuple[str, int], str] = {}  # (scan, nodule) -> outline file, so a repeated Record gets the same answer
+    recorded_marks: dict[tuple[str, int], dict] = {}  # (scan, nodule) -> {"suggestions": ranks} when the scan had a finder run
     record_lock = threading.Lock()  # the file write sits between two session calls: serialise Record
     segmenter = segmenter_factory()
     session = OutlineSession(segmenter, width == "edge")  # built once: loading the model takes seconds
@@ -187,12 +223,17 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             return "OK"  # exactly this: a fixed 200 "OK", no scans, no version, no model action
     space_host = os.environ.get("SPACE_HOST") if server else None  # set by Hugging Face; a Space without server mode then answers 400
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"] + ([space_host] if space_host else []))  # blocks DNS rebinding
+    if server:  # a slice is 512 KB of raw int16 and the download through Hugging Face's proxy dominates (measured): gzip cuts about 45%. Loopback: none
+        app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)  # level 6: about the same size as 9 on RIDER slices, in a third of the time
     origin = os.environ.get("LUNG_ALLOWED_ORIGIN", APP_ORIGIN)  # empty turns CORS off; Starlette answers only this exact origin
     if server and origin != APP_ORIGIN:  # a practice server answers only the hosted app: never "*", another site or no CORS
         raise ValueError(f"Server mode answers only {APP_ORIGIN}: leave LUNG_ALLOWED_ORIGIN unset or set it to exactly that.")
+    if "*" in origin:  # it is also /picker's frame-ancestors and the frame's postMessage target: one exact address, never a wildcard
+        raise ValueError(f"LUNG_ALLOWED_ORIGIN must be one exact address, such as {APP_ORIGIN}, never \"*\": got {origin!r}.")
     if origin:
         app.add_middleware(CORSMiddleware, allow_origins=[origin], allow_methods=["GET", "POST"],
-                           allow_headers=["Content-Type"] + (["Authorization"] if server else []), allow_private_network=True)  # Chrome's Private Network Access
+                           allow_headers=["Content-Type"] + (["Authorization"] if server else []), allow_private_network=True,  # Chrome's Private Network Access
+                           max_age=600)  # the browser keeps a preflight 10 min: with one slice URL, one preflight per 10 min (POST /api/slice)
 
         @app.middleware("http")  # outermost: Starlette lists methods and private-network even when it refuses an origin; send nothing
         async def refuse_other_preflight(request, call_next):
@@ -201,10 +242,17 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             return await call_next(request)
     @app.middleware("http")  # outermost of all: folder names are often patient names; a cross-origin page (the hosted page, and Base44's scripts in it) gets none
     async def folders_on_own_page_only(request, call_next):
-        if request.scope["path"].startswith("/api/folders"):  # the routed path, the one the router matches
-            if cross_origin(request):
-                return JSONResponse({"detail": FOLDERS_LOCAL_ONLY}, 403)  # no CORS headers: the other page cannot even read the refusal
-        return await call_next(request)
+        p = request.scope["path"]  # the routed path, the one the router matches
+        named = p.startswith("/api/folders") or (p.startswith("/api/patients") and not server)  # a practice server lists public practice patients only
+        # Another site may load /picker only as a frame (a top-level frame navigation); frame-ancestors lets only the hosted page do so. Its own fetches are same-origin.
+        framed = p == PICKER and request.method == "GET" and request.headers.get("sec-fetch-dest") == "iframe"
+        if (named or p == PICKER) and cross_origin(request) and not framed:
+            return JSONResponse({"detail": FOLDERS_LOCAL_ONLY}, 403)  # no CORS headers: the other page cannot even read the refusal
+        response = await call_next(request)
+        if named:  # no <img> or <script> on another page may load them either (no-cors)
+            response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'")  # only /picker names a page that may frame it
+        return response
 
     def make_ref(file: str, what: str):
         """A random 8-hex code per key, kept in runs/<file>: study records then need not carry the real name."""
@@ -239,9 +287,13 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
     def hidden(scan_id: str) -> bool:  # a data-folder id that may carry a name: a cross-origin caller must use its D- code
         return not server and not FOLDER_ID.fullmatch(scan_id) and scan_id.rpartition("_")[0] not in practice
 
+    def code(scan_id: str) -> str:
+        """The id as the hosted page sees it: a D- code for a hidden scan, else the id itself."""
+        return "D-" + scan_ref(scan_id) if hidden(scan_id) else scan_id
+
     def shown(scan_id: str, request: Request) -> str:
         """The id a caller may see: a cross-origin caller gets a D- code for a hidden scan."""
-        return "D-" + scan_ref(scan_id) if hidden(scan_id) and cross_origin(request) else scan_id
+        return code(scan_id) if cross_origin(request) else scan_id
 
     def refs_file() -> dict:
         try:
@@ -280,7 +332,7 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             busy = {"busy": held_by_other(user and user["id"]), "idle_min": idle_min}
             # without a sign-in: only what the page's readiness check needs
             return {**out, "server": busy} if user else {"commit": events.commit, "server": busy}
-        return out
+        return {**out, "picker": (dist / "picker.html").is_file()}  # only when /picker can answer (an unbuilt checkout 404s it: the hosted page then keeps the drop-down)
 
     def known_id(scan_id: str) -> bool:  # the id's shape; in server mode, practice patients only
         return valid_scan_id(scan_id) and (not server or scan_id.rpartition("_")[0] in practice)
@@ -332,6 +384,27 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             raise HTTPException(403, "That folder cannot be read.")
         return p
 
+    rel = lambda q: "" if q == browse_root else q.relative_to(browse_root).as_posix()
+
+    def save(path: Path, obj):  # whole or not at all: a crash mid-write leaves the old file
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(obj))
+        os.replace(tmp, path)
+
+    def folder_ids(pairs: list[list[str]]) -> list[str]:
+        """An F- id per [folder, series hash], kept in runs/folder_scans.json: the same folder and series always get the same id."""
+        with lock:
+            have = {tuple(v): k for k, v in folder_scans.items()}
+            n = len(folder_scans)
+            for pair in pairs:
+                if tuple(pair) not in have:
+                    while (sid := "F-" + secrets.token_hex(4)) in folder_scans:  # two series never share an id
+                        pass
+                    folder_scans[sid], have[tuple(pair)] = pair, sid
+            if len(folder_scans) > n:
+                save(folder_file, folder_scans)
+            return [have[tuple(p)] for p in pairs]
+
     def save_outline(s: Scan, mask, nodule: int, kind: str) -> Path:
         path, i = runs_dir / "outlines" / f"{s.id}_n{nodule}_{kind}.nii.gz", 1
         while path.exists():  # never overwrite an earlier file, from an earlier run or this one: one file per Record
@@ -346,7 +419,9 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
         out = list_scans(data_root)
         if cross_origin(request):
             out = sorted(({"id": shown(s["id"], request), "patient": patient_ref(s["patient"]), "series": s["series"]} if hidden(s["id"]) else s for s in out), key=lambda s: s["id"])  # by shown id: the order gives nothing away
-        return out + [{"id": i, "patient": "Opened folders", "series": i} for i in folder_scans]
+        with lock:  # a first study index adds many ids at once
+            opened = sorted(folder_scans) if cross_origin(request) else list(folder_scans)  # by code: the order gives nothing away
+        return out + [{"id": i, "patient": "Opened folders", "series": i} for i in opened]
 
     folder_api = APIRouter()  # left out in server mode: no folder opening there
 
@@ -357,7 +432,6 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             names = sorted(d.name for d in p.iterdir() if not d.name.startswith(".") and d.is_dir() and d.resolve().is_relative_to(browse_root))
         except PermissionError:
             raise HTTPException(403, "That folder cannot be read.")
-        rel = lambda q: "" if q == browse_root else q.relative_to(browse_root).as_posix()
         try:
             series = folder_series(p)
         except RuntimeError:
@@ -374,15 +448,111 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             raise HTTPException(400, UNREADABLE)
         if o.series not in found:
             raise HTTPException(404, "That series is not in this folder.")
-        with lock:  # same folder and series again: same id
-            sid = next((i for i, v in folder_scans.items() if v == [str(p), o.series]), None)
-            if not sid:
-                sid = "F-" + secrets.token_hex(4)
-                folder_scans[sid] = [str(p), o.series]
-                tmp = folder_file.with_suffix(".tmp")
-                tmp.write_text(json.dumps(folder_scans))
-                os.replace(tmp, folder_file)
-        return scan_info(sid, request)  # the same reply as GET /api/scans/{id}, study date rule included
+        return scan_info(folder_ids([[str(p), o.series]])[0], request)  # the same reply as GET /api/scans/{id}, study date rule included
+
+    def study_patients(root: Path) -> list[dict]:
+        """The study folder's patients, from the index in runs/ (headers only); each series gets its F- id, so /api/scans/{id} opens it."""
+        if root in over_cap:
+            raise TooManyFiles
+        t0, files = time.perf_counter(), [0]
+        try:
+            entries = index_folder(root, runs_dir / "study_index.json", lambda n: files.__setitem__(0, n), MAX_STUDY_FILES)
+        except TooManyFiles:
+            over_cap.add(root)
+            raise
+        for e, sid in zip(entries, folder_ids([[str(root / e["folder"]), e["series_uid_hash"]] for e in entries])):
+            e["id"] = sid
+        tl = timeline(entries)
+        meta = {}
+        for p in tl:  # timepoint: the order of the scan's study day among the patient's dated days (Baseline 0)
+            days = sorted({s["day"] for s in p["scans"] if s["day"] is not None})
+            undated = [s["id"] for s in p["scans"] if s["day"] is None]  # a blanked date (anonymisation): each its own timepoint after the dated
+            tp = lambda s: days.index(s["day"]) if s["day"] is not None else len(days) + undated.index(s["id"])  # days, never 0 beside a Baseline
+            meta |= {s["id"]: {"patient": p["patient_key"], "day": s["day"], "timepoint": tp(s)} for s in p["scans"]}
+        with lock:  # scan info reads these: a study scan's record carries its patient's code and day, also after a restart
+            if any(study_scans.get(k) != v for k, v in meta.items()):
+                study_scans.update(meta)
+                save(study_scans_file, study_scans)
+        out = [{"key": patient_ref(p["patient_key"]), "name": display_name(p["scans"][0]["patient_name"]) or p["patient_key"], "source": "study",
+                "scans": [{"id": s["id"], "code": code(s["id"]), "timepoint": s["timepoint"], "date": s["study_date"], "day": s["day"], "label": label(s),
+                           "slice_mm": s["slice_mm"], "images": s["images"]} for s in p["scans"]]} for p in tl]
+        events.log("study_index", patients=len(out), scans=len(entries), files=files[0], seconds=round(time.perf_counter() - t0, 1))  # counts only
+        return sorted(out, key=lambda p: (p["name"], p["key"]))
+
+    def data_patients() -> list[dict]:
+        """The data folder's patients (ct_test is the Baseline, ct_retest the Follow-up), from one header per series, no pixels."""
+        by: dict[str, list[dict]] = {}
+        for s in list_scans(data_root):
+            if not server or s["patient"] in practice:
+                by.setdefault(s["patient"], []).append(s)
+        out = []
+        for n, (p, ss) in enumerate(sorted(by.items()), 1):
+            scans = []
+            for s in sorted(ss, key=lambda s: s["series"] != "test"):
+                d = data_root / p / f"ct_{s['series']}"
+                date = study_date(d)
+                try:
+                    images = sum(not f.startswith(".") for f in os.listdir(d))
+                except OSError:  # a broken link from a half-done fetch: listed, as /api/scans lists it
+                    images = 0
+                scans.append({"id": s["id"], "code": code(s["id"]), "timepoint": "Baseline" if s["series"] == "test" else "Follow-up",
+                              "date": None if server else date,  # the hosted page never gets a study date
+                              "day": None if date is None else baseline_days(data_root, p, date), "label": f"{s['series'].capitalize()} scan",
+                              "slice_mm": None, "images": images})
+            out.append({"key": p if p in practice else patient_ref(p), "name": f"Practice patient {n}" if server else p, "source": "data", "scans": scans})
+        return out
+
+    def study_path() -> str | None:
+        """LUNG_STUDY_DIR, else the folder the panel set (relative to the browse root), else None."""
+        if study_env:
+            return study_env
+        try:
+            return json.loads(study_file.read_text())["path"]
+        except (OSError, ValueError, KeyError, TypeError):  # never set, or damaged: no study folder until the panel sets one
+            return None
+
+    def study_root(path: str) -> Path:
+        p = inside(path)
+        if p == browse_root:  # the whole home folder: the index would read every file in it
+            raise HTTPException(400, root_itself)
+        return p
+
+    @app.get("/api/patients")
+    def patients():  # names: the engine's own page only (the guard above), except the practice server's public patients
+        if server or (path := study_path()) is None:
+            return {"folder": {"path": None, "from": None, "error": None}, "patients": data_patients()}
+        folder, out = {"path": None if Path(path).is_absolute() else path, "from": "LUNG_STUDY_DIR" if study_env else "panel", "error": None}, []
+        try:
+            root = study_root(path)
+            folder["path"], out = rel(root), study_patients(root)
+        except HTTPException as e:  # gone, unreadable, or the browse root changed: the data folder is still listed
+            folder["error"] = {404: STUDY_GONE, 403: STUDY_UNREADABLE}.get(e.status_code, e.detail)
+            if study_env:  # the panel offers no Change then: point to the variable
+                folder["error"] = folder["error"].replace("Choose it again with Change folder…", "Check LUNG_STUDY_DIR on this computer.")
+        except TooManyFiles:
+            folder["error"] = too_many()
+        except Exception as e:  # one bad file must never take the data patients with it
+            events.log("study_index_failed", reason=type(e).__name__)  # the type only: the message can hold a path or a name
+            folder["error"] = STUDY_FAILED
+        return {"folder": folder, "patients": out + data_patients()}
+
+    @folder_api.post("/api/patients/folder")
+    def set_study_folder(path: str = Body(embed=True)):
+        if study_env:
+            raise HTTPException(409, BY_ENV)
+        try:
+            root = study_root(path)
+            over_cap.discard(root)  # the user may have made it smaller: try again
+            study_patients(root)  # before saving: an over-cap folder is refused and the old one stays
+            save(study_file, {"path": rel(root)})
+        except TooManyFiles:
+            raise HTTPException(400, too_many())
+        except HTTPException:  # already a plain line
+            raise
+        except Exception as e:  # never a traceback text with a path or a name: the type only goes to the log
+            events.log("study_index_failed", reason=type(e).__name__)
+            raise HTTPException(500, STUDY_FAILED)
+        return patients()  # from the cache just written
 
     if not server:
         app.include_router(folder_api)
@@ -392,12 +562,14 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
         scan_id = resolve(scan_id, request)
         s = get_scan(scan_id)
         ref = scan_ref(scan_id)  # before the log line: a damaged refs file logs nothing
-        code = s.patient if s.patient in practice else patient_ref(s.patient)
+        m = study_scans.get(scan_id)  # a study-folder scan: the patient and day the index gave it
+        code = patient_ref(m["patient"]) if m else s.patient if s.patient in practice else patient_ref(s.patient)
         events.log("open_scan", scan=scan_id)
         out = {"id": shown(s.id, request), "scan_ref": ref, "study_code": code, "patient": code if hidden(s.id) and cross_origin(request) else s.patient, "series": s.series,
                "shape": list(s.array.shape), "spacing": list(s.spacing),
                "instance_numbers": s.instance_numbers, "series_number": s.series_number, "study_date": s.study_date,
-               "days_from_baseline": baseline_days(data_root, s.patient, s.study_date),
+               "days_from_baseline": (m["day"] or 0) if m else baseline_days(data_root, s.patient, s.study_date),
+               "timepoint": m.get("timepoint") if m else None,  # a study scan's order; None: the page's own rule (RIDER test 0, retest 1)
                "slice_thickness_mm": s.slice_thickness_mm,
                "head_dir": head_dir(s)}
         if cross_origin(request):  # the hosted page never gets the study date
@@ -410,6 +582,10 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
         if not 0 <= z < s.array.shape[0]:
             raise HTTPException(404, "slice out of range")
         return Response(s.array[z].astype("<i2").tobytes(), media_type="application/octet-stream")
+
+    @app.post("/api/slice")
+    def slice_post(b: SliceReq, request: Request):  # the same bytes and errors as the GET above (the token's preflight is per URL)
+        return slice_bytes(b.scan, b.z, request)
 
     @app.get("/api/scans/{to}/map")
     def map_point(to: str, z: int, y: int, x: int, request: Request, src: str = Query(alias="from")):
@@ -530,18 +706,20 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
             except Empty:
                 raise HTTPException(400, "Nothing to record: the outline is empty.")
             except AlreadyRecorded:  # a retry after a lost reply: same file, no new event
-                return {"outline_file": file_out(recorded_files[(w.scan, w.nodule)], w.scan, request)}
+                return {"outline_file": file_out(recorded_files[(w.scan, w.nodule)], w.scan, request), **recorded_marks.get((w.scan, w.nodule), {})}
             try:
                 f = save_outline(scan, full, out["nodule"], "accepted").relative_to(runs_dir).as_posix()
             except BaseException:  # a failed write must not leave the nodule unrecordable
                 session.unrecord((w.scan, w.nodule))
                 raise
             recorded_files[(w.scan, w.nodule)] = f  # before the log line: if logging fails the nodule stays recorded and a retry answers
+            marks = candidates.get(w.scan)  # the scan's last finder run: the ranks (1 = first in its list) whose voxel the accepted outline holds, whoever started it
+            recorded_marks[(w.scan, w.nodule)] = inside = {} if marks is None else {"suggestions": [i + 1 for i, m in enumerate(marks) if full[m["z"], m["y"], m["x"]]]}
             events.log("record", scan=out["scan"], nodule=out["nodule"], outline_file=f, clicks=len(out["clicks"]),
                        corrections=max(0, len(out["clicks"]) - 1), series_number=scan.series_number, slice_thickness_mm=scan.slice_thickness_mm, slice_spacing_mm=scan.spacing[2],
                        **{k: out[k] for k in ("volume_ml", "long_mm", "short_mm", "depth_mm", "width_method", "axis_z", "long_line", "short_line", "at_window_edge", "painted", "axes_edited")},
-                       **w.model_dump(include={"follows", "map_distance_mm"}, exclude_none=True))
-            return {"outline_file": file_out(f, w.scan, request)}
+                       **w.model_dump(include={"follows", "map_distance_mm"}, exclude_none=True), **inside)
+            return {"outline_file": file_out(f, w.scan, request), **inside}
 
     @app.post("/api/events")
     def ui_event(e: UiEvent, request: Request):
@@ -551,7 +729,73 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
         events.log(e.action, **e.model_dump(exclude={"action"}, exclude_none=True))
         return {}
 
+    def copilot_ready():
+        if not copilot_on:
+            raise HTTPException(403, "The co-pilot is off for this session.")
+        if isinstance(finder, NoFinder):
+            raise HTTPException(503, "No nodule finder is installed in this engine.")
+
+    @app.get("/api/copilot")
+    def copilot():
+        on = copilot_on and not isinstance(finder, NoFinder)
+        return {"enabled": on, "finder": finder.name if on else None}
+
+    def own_or_allowed(request: Request):
+        """A POST with no body is a "simple" request: another website could send it without a preflight. Only the engine's own page and the allowed origin pass."""
+        o = request.headers.get("origin")
+        if (o is not None and o not in (f"{request.url.scheme}://{request.headers.get('host', '')}", origin)) or (o is None and request.headers.get("sec-fetch-site") == "cross-site"):
+            raise HTTPException(403, "Only the engine's own page or the lab app can run the finder.")  # CORS adds no header for a foreign origin
+
+    @app.post("/api/scans/{scan_id}/candidates")
+    def find_candidates(scan_id: str, request: Request):
+        own_or_allowed(request)
+        scan_id = resolve(scan_id, request)
+        copilot_ready()
+        s = get_scan(scan_id)
+        if not finder_lock.acquire(blocking=False):
+            if finding["scan"] == scan_id:
+                raise HTTPException(409, "The finder is already running.")
+            finder.cancel()  # a run for another scan: its page has moved on, so this one takes over
+            if not finder_lock.acquire(timeout=10):
+                raise HTTPException(409, "The finder is already running.")
+        finding["scan"] = scan_id
+        try:
+            t0, cut = time.perf_counter(), CUT
+            try:
+                found = to_voxels(s, finder.find(s), cut)
+            except FinderMissing:
+                raise HTTPException(503, "No nodule finder is installed in this engine.")
+            except FinderError as e:  # its own words go to the engine's console only, never to a page
+                logging.getLogger("uvicorn.error").warning("The finder did not run: %s", e)
+                raise HTTPException(500, FINDER_FAILED)
+            candidates[scan_id] = found
+            events.log("candidates_found", scan=scan_id, count=len(found), cut=cut,
+                       seconds=round(time.perf_counter() - t0, 2), finder=finder.name)
+            return found
+        finally:
+            finding["scan"] = None
+            finder_lock.release()
+
+    @app.get("/api/scans/{scan_id}/candidates")
+    def get_candidates(scan_id: str, request: Request):
+        scan_id = resolve(scan_id, request)
+        copilot_ready()
+        if scan_id not in candidates:
+            raise HTTPException(404, "No suggestions yet: press Find nodules.")
+        return candidates[scan_id]
+
     dist = REPO / "web" / "dist"
+    if not server:
+        @app.get(PICKER, response_class=HTMLResponse)
+        def picker():
+            """The Patients panel alone (web/picker.html), framed by the hosted page only; it posts to that page's exact origin, written into the page here."""
+            try:
+                page = (dist / "picker.html").read_text()
+            except OSError:
+                raise HTTPException(404, "The page is not built. Run npm run build in web/.")
+            return HTMLResponse(page.replace("__LUNG_PARENT__", html.escape(origin)), headers={
+                "Content-Security-Policy": "frame-ancestors " + (origin or "'none'"), "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
     if dist.exists() and not server:  # the server has no page: the hosted page is the page
         app.mount("/", StaticFiles(directory=dist, html=True))
     return app

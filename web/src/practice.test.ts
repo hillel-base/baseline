@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { PROBE_MS, pickServer, probe, servers } from "./practice";
+import { PROBE_MS, STUCK_MS, askInOrder, pickServer, probe, servers, waking, type PracticeState } from "./practice";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 const answer = (status: number, body: unknown) => {
@@ -71,7 +71,7 @@ test("an immediate network error is unavailable", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
   expect(await probe("https://p.example", "tok")).toBe("unavailable");
 });
-test("no answer within the time limit is starting", async () => {
+test("no answer within the time limit is starting: a starting Space, and a sleeping one that is waking", async () => {
   vi.stubGlobal("fetch", vi.fn((_u: string, init: RequestInit) => new Promise((_, no) => init.signal!.addEventListener("abort", () => no(init.signal!.reason)))));
   expect(await probe("https://p.example", "tok", 30)).toBe("starting");
 });
@@ -80,4 +80,38 @@ test("the first ready server in list order wins; with none ready, the most hopef
   expect(pickServer([{ url: "a", state: "paused" }, { url: "b", state: "starting" }])).toEqual({ url: "b", state: "starting" });
   expect(pickServer([{ url: "a", state: "unavailable" }, { url: "b", state: "busy" }])).toEqual({ url: "b", state: "busy" });
   expect(pickServer([{ url: "a", state: "paused" }])).toEqual({ url: "a", state: "paused" });
+});
+
+// Automatic sleep: each ask wakes a sleeping server for an hour of T4 time, so the next server is asked only when this one cannot serve.
+const looks = (states: Record<string, PracticeState>) => { const asked: string[] = []; return { asked, look: async (u: string) => { asked.push(u); return states[u]; } }; };
+test("askInOrder: server 1 ready or waking is the answer, and server 2 is never asked (never woken)", async () => {
+  for (const one of ["ready", "starting"] as const) {
+    const { asked, look } = looks({ a: one, b: "ready" });
+    expect(await askInOrder(["a", "b"], look)).toEqual({ url: "a", state: one });
+    expect(asked).toEqual(["a"]);
+  }
+});
+test("askInOrder: server 1 busy, paused or failing asks server 2; the first ready wins, else the most hopeful state", async () => {
+  for (const one of ["busy", "paused", "unavailable"] as const) {
+    const { asked, look } = looks({ a: one, b: "ready" });
+    expect(await askInOrder(["a", "b"], look)).toEqual({ url: "b", state: "ready" });
+    expect(asked).toEqual(["a", "b"]);
+  }
+  expect(await askInOrder(["a", "b"], looks({ a: "busy", b: "busy" }).look)).toEqual({ url: "a", state: "busy" });
+  expect(await askInOrder(["a", "b"], looks({ a: "paused", b: "starting" }).look)).toEqual({ url: "b", state: "starting" });
+});
+test("askInOrder: server 1 starting for STUCK_MS (stuck: no T4, a crash loop) asks server 2 as well; before that, never", async () => {
+  expect(STUCK_MS).toBe(5 * 60_000);
+  let t = 0;
+  const w = waking(() => t), { asked, look } = looks({ a: "starting", b: "ready" });
+  const ask = () => askInOrder(["a", "b"], async (u) => { const s = await look(u); w.seen(u, s); return s; }, w.stuck);
+  expect(await ask()).toEqual({ url: "a", state: "starting" });
+  t = STUCK_MS - 1;
+  expect(await ask()).toEqual({ url: "a", state: "starting" });
+  expect(asked).toEqual(["a", "a"]); // server 2 still asleep
+  t = STUCK_MS;
+  expect(await ask()).toEqual({ url: "b", state: "ready" }); // 5 minutes of starting: server 2 is asked and wins
+  expect(asked).toEqual(["a", "a", "a", "b"]);
+  w.seen("a", "unavailable"); w.seen("a", "starting"); // a break restarts the 5 minutes
+  expect(w.stuck("a")).toBe(false);
 });

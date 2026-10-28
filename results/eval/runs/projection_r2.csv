@@ -1,0 +1,85 @@
+kind,machine,step,runs,median_s,q1_s,q3_s,fastest_s,slowest_s,lab_low_s,verdict,lab_min,tool_min,saved_pct,lab_hours,tool_hours,tool_hours_slowest
+a,mac,volume,16,19.4,18.1,24.6,14.2,40.2,900,clear,,,,,,
+a,mac,axes,16,20.6,19.0,25.6,14.4,41.3,120,not clear,,,,,,
+a,mac,record,16,12.9,10.8,17.1,6.5,21.5,180,clear,,,,,,
+a,mac,per tumour,16,34.2,30.4,42.8,23.1,62.8,,,,,,,,
+a,mac,per scan,16,42.3,36.3,52.9,27.6,64.0,,,,,,,,
+a,mac,"per scan, failures left out",8,38.0,33.4,47.2,27.6,53.5,,,,,,,,
+a,mac,"whole week (target basis), re-find unchanged",16,,,,,,,,501,315,37.1,,,
+a,mac,"whole week (target basis), re-find as the target assumed",16,,,,,,,,501,236,52.9,,,
+a,mac,"week, volume today, lab mid",16,,,,,,,,,,95.0,3.26,0.16,0.31
+a,mac,"week, volume today, lab low",16,,,,,,,,,,93.0,1.6,0.11,0.21
+a,mac,"week, volume today, lab high",16,,,,,,,,,,96.1,5.75,0.23,0.43
+a,mac,"week, volume every tumour, lab mid",16,,,,,,,,,,98.1,8.66,0.16,0.31
+a,mac,"week, volume every tumour, lab low",16,,,,,,,,,,97.2,4.0,0.11,0.21
+a,mac,"week, volume every tumour, lab high",16,,,,,,,,,,98.6,15.75,0.23,0.43
+a,pc,volume,16,37.2,36.2,42.6,32.1,95.3,900,clear,,,,,,
+a,pc,axes,16,38.1,37.0,43.6,32.3,96.4,120,not clear,,,,,,
+a,pc,record,16,12.9,10.8,17.1,6.5,21.5,180,clear,,,,,,
+a,pc,per tumour,16,51.8,48.3,60.1,41.0,117.9,,,,,,,,
+a,pc,per scan,16,60.3,54.3,70.9,45.6,119.1,,,,,,,,
+a,pc,"per scan, failures left out",8,56.0,51.1,65.2,45.6,71.5,,,,,,,,
+a,pc,"whole week (target basis), re-find unchanged",16,,,,,,,,501,321,35.9,,,
+a,pc,"whole week (target basis), re-find as the target assumed",16,,,,,,,,501,242,51.7,,,
+a,pc,"week, volume today, lab mid",16,,,,,,,,,,91.9,3.26,0.26,0.62
+a,pc,"week, volume today, lab low",16,,,,,,,,,,89.4,1.6,0.17,0.39
+a,pc,"week, volume today, lab high",16,,,,,,,,,,93.5,5.75,0.37,0.89
+a,pc,"week, volume every tumour, lab mid",16,,,,,,,,,,97.0,8.66,0.26,0.62
+a,pc,"week, volume every tumour, lab low",16,,,,,,,,,,95.7,4.0,0.17,0.39
+a,pc,"week, volume every tumour, lab high",16,,,,,,,,,,97.6,15.75,0.37,0.89
+a,pc2,volume,16,62.0,61.0,67.4,56.9,169.7,900,clear,,,,,,
+a,pc2,axes,16,63.0,61.8,68.4,57.1,170.8,120,not clear,,,,,,
+a,pc2,record,16,12.9,10.8,17.1,6.5,21.5,180,clear,,,,,,
+a,pc2,per tumour,16,76.6,73.1,84.9,65.8,192.3,,,,,,,,
+a,pc2,per scan,16,85.1,79.0,95.7,70.4,193.5,,,,,,,,
+a,pc2,"per scan, failures left out",8,80.8,75.9,90.0,70.4,96.3,,,,,,,,
+a,pc2,"whole week (target basis), re-find unchanged",16,,,,,,,,501,329,34.3,,,
+a,pc2,"whole week (target basis), re-find as the target assumed",16,,,,,,,,501,250,50.0,,,
+a,pc2,"week, volume today, lab mid",16,,,,,,,,,,87.7,3.26,0.4,1.04
+a,pc2,"week, volume today, lab low",16,,,,,,,,,,84.2,1.6,0.25,0.64
+a,pc2,"week, volume today, lab high",16,,,,,,,,,,89.9,5.75,0.58,1.51
+a,pc2,"week, volume every tumour, lab mid",16,,,,,,,,,,95.4,8.66,0.4,1.04
+a,pc2,"week, volume every tumour, lab low",16,,,,,,,,,,93.7,4.0,0.25,0.64
+a,pc2,"week, volume every tumour, lab high",16,,,,,,,,,,96.3,15.75,0.58,1.51
+b,mac,volume,16,48.5,20.3,59.2,14.2,142.2,900,clear,,,,,,
+b,mac,axes,16,49.2,20.9,60.0,14.4,142.6,120,not clear,,,,,,
+b,mac,record,16,12.9,10.8,17.1,6.5,21.5,180,clear,,,,,,
+b,mac,per tumour,16,61.5,37.0,74.4,23.1,157.3,,,,,,,,
+b,mac,per scan,16,66.7,42.9,83.5,35.8,175.1,,,,,,,,
+b,mac,"per scan, failures left out",9,49.4,38.0,64.8,35.8,83.5,,,,,,,,
+b,mac,"whole week (target basis), re-find unchanged",16,,,,,,,,501,325,35.2,,,
+b,mac,"whole week (target basis), re-find as the target assumed",16,,,,,,,,501,246,51.0,,,
+b,mac,"week, volume today, lab mid",16,,,,,,,,,,90.0,3.26,0.33,0.88
+b,mac,"week, volume today, lab low",16,,,,,,,,,,87.1,1.6,0.21,0.55
+b,mac,"week, volume today, lab high",16,,,,,,,,,,91.9,5.75,0.46,1.28
+b,mac,"week, volume every tumour, lab mid",16,,,,,,,,,,96.2,8.66,0.33,0.88
+b,mac,"week, volume every tumour, lab low",16,,,,,,,,,,94.8,4.0,0.21,0.55
+b,mac,"week, volume every tumour, lab high",16,,,,,,,,,,97.1,15.75,0.46,1.28
+b,pc,volume,16,102.0,38.2,129.8,32.1,244.8,900,not clear,,,,,,
+b,pc,axes,16,102.5,38.9,130.6,32.3,245.2,120,not clear,,,,,,
+b,pc,record,16,12.9,10.8,17.1,6.5,21.5,180,clear,,,,,,
+b,pc,per tumour,16,115.8,54.9,141.4,41.0,259.9,,,,,,,,
+b,pc,per scan,16,120.0,60.8,153.9,53.7,277.7,,,,,,,,
+b,pc,"per scan, failures left out",9,67.4,56.0,119.0,53.7,155.9,,,,,,,,
+b,pc,"whole week (target basis), re-find unchanged",16,,,,,,,,501,343,31.6,,,
+b,pc,"whole week (target basis), re-find as the target assumed",16,,,,,,,,501,264,47.4,,,
+b,pc,"week, volume today, lab mid",16,,,,,,,,,,80.8,3.26,0.63,1.46
+b,pc,"week, volume today, lab low",16,,,,,,,,,,75.9,1.6,0.39,0.89
+b,pc,"week, volume today, lab high",16,,,,,,,,,,84.2,5.75,0.91,2.13
+b,pc,"week, volume every tumour, lab mid",16,,,,,,,,,,92.8,8.66,0.63,1.46
+b,pc,"week, volume every tumour, lab low",16,,,,,,,,,,90.4,4.0,0.39,0.89
+b,pc,"week, volume every tumour, lab high",16,,,,,,,,,,94.2,15.75,0.91,2.13
+b,pc2,volume,16,176.3,63.0,229.0,56.9,393.6,900,not clear,,,,,,
+b,pc2,axes,16,176.9,63.7,229.8,57.1,394.0,120,not clear,,,,,,
+b,pc2,record,16,12.9,10.8,17.1,6.5,21.5,180,clear,,,,,,
+b,pc2,per tumour,16,190.2,79.7,240.6,65.8,408.7,,,,,,,,
+b,pc2,per scan,16,194.4,85.6,253.0,78.5,426.5,,,,,,,,
+b,pc2,"per scan, failures left out",9,92.2,80.8,193.4,78.5,255.1,,,,,,,,
+b,pc2,"whole week (target basis), re-find unchanged",16,,,,,,,,501,368,26.6,,,
+b,pc2,"whole week (target basis), re-find as the target assumed",16,,,,,,,,501,289,42.4,,,
+b,pc2,"week, volume today, lab mid",16,,,,,,,,,,68.0,3.26,1.04,2.3
+b,pc2,"week, volume today, lab low",16,,,,,,,,,,60.4,1.6,0.63,1.39
+b,pc2,"week, volume today, lab high",16,,,,,,,,,,73.4,5.75,1.53,3.37
+b,pc2,"week, volume every tumour, lab mid",16,,,,,,,,,,87.9,8.66,1.04,2.3
+b,pc2,"week, volume every tumour, lab low",16,,,,,,,,,,84.2,4.0,0.63,1.39
+b,pc2,"week, volume every tumour, lab high",16,,,,,,,,,,90.3,15.75,1.53,3.37

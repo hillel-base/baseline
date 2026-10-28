@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DemoView } from "./DemoView";
 import { InstallView } from "./InstallView";
 import { About } from "./About";
 import { App, Logo } from "./App";
-import { IN_USE, PRACTICE_STOPPED, SIGN_IN_FIRST, onBlocked, postEvent, probeEngine, releaseSession, setApiBase, setAuth } from "./api";
+import { IN_USE, PRACTICE_STOPPED, SIGN_IN_FIRST, onBlocked, postEvent, probeEngine, releaseSession, setApiBase, setAuth, type Patients } from "./api";
 import { accessToken, configError, currentUser, entities, signIn, signOut } from "./base44";
-import { PROBE_MS, pickServer, probe, servers, type PracticeState } from "./practice";
+import { PROBE_MS, askInOrder, probe, servers, waking, type PracticeState } from "./practice";
 import { StudyView } from "./StudyView";
 import { WAITING_LOCAL } from "./texts";
 import { RETRY_MS, WAITING, outbox, signOutLine, toEntities, type Payload } from "./study";
 import { keepInMemory } from "./record";
 import { INVITE_ONLY, NO_BASE44, guardStore, resolveSession, type Session } from "./session";
+import { Coach } from "./Coach";
+import { CASE, markOffered, practiceN, shouldOffer, unmarkOffered } from "./tutorial";
 
 keepInMemory(); // the hosted page keeps its table in memory: the Study table is the lasting record
 // Only the rows still waiting to be saved stay in this origin's storage, each under its own key until Base44 confirms it, and each is sent
@@ -26,9 +28,11 @@ let newest: string | undefined; // the outline file of the newest Record on this
 const LOCAL_ENGINE = import.meta.env.VITE_ENGINE_URL ?? "http://localhost:8000"; // VITE_ENGINE_URL is for the e2e tests only; the deployed build never sets it
 // Chrome holds the first request to this computer while it asks about "apps on this device": time to choose Allow. A refused connection still fails at once.
 export const LOCAL_PROBE_MS = 60_000;
+/** Automatic sleep: after this long without a click on the page, the card stops asking the practice servers, so a forgotten tab cannot keep them awake. */
+export const IDLE_STOP_MS = 15 * 60_000;
 const TABS = ["Measure", "Study table", "Demo"] as const;
 type Tab = (typeof TABS)[number];
-type Engine = { state: "idle" } | { state: "trying"; local: boolean } | { state: "none" } | { state: "live"; commit: string; model: string; practice?: string }; // practice: the server in use
+type Engine = { state: "idle" } | { state: "trying"; local: boolean } | { state: "none" } | { state: "live"; commit: string; model: string; practice?: string; picker?: boolean }; // practice: the server in use
 const PRACTICE = servers(import.meta.env.VITE_PRACTICE_SERVERS); // set at build time; none hides the practice option
 const LIVE = "Practice server"; // the line names the server only; the card says how fast it is
 const CHANGE_ASK = "This outline is not recorded yet. Change anyway?";
@@ -40,25 +44,33 @@ export const isSafari = (ua: string) => /safari/i.test(ua) && !/chrome|chromium|
 export const REAL_DATA_NOTE = "For real patient data, use the tool's own page on your computer (http://localhost:8000), not this page.";
 export const safariNote = (practice: boolean) => `In Safari, this page cannot reach the tool on your computer. Use Chrome or Firefox${practice ? ", or the practice server" : ""}. The tool's own page on your computer (http://localhost:8000) works in Safari.`;
 const SAFARI = typeof navigator !== "undefined" && isSafari(navigator.userAgent);
-const SAYS: Record<Exclude<PracticeState, "ready">, string> = {
-  paused: "The practice server is paused right now.",
-  starting: "The practice server is starting. This takes about 4 minutes; the page connects by itself.",
+const SAYS: Record<Exclude<PracticeState, "ready"> | "idle", string> = {
+  paused: "The practice server is paused right now. To try the tool, open the Demo. To measure your own scans, run it on your computer", // the card adds " (How to install it)."
+  starting: "The practice server is starting. This takes 1 to 4 minutes; the page connects by itself.",
+  idle: "This page stopped asking the practice server after 15 minutes without a click.", // its last answer is old, so the card shows this instead
   unavailable: "The practice server is starting or cannot be reached. We will try again.",
   busy: BUSY,
 };
-/** The practice servers asked at once; the first ready one in list order wins. */
-const askAll = (urls = PRACTICE) => Promise.all(urls.map(async (url) => ({ url, state: await probe(url, accessToken()) }))).then(pickServer);
+/** The practice servers in list order, the next only when one cannot serve or has been starting for 5 minutes (practice.ts): a visit wakes one T4, not both. */
+const wake = waking();
+const askAll = (urls = PRACTICE) => askInOrder(urls, async (url) => { const s = await probe(url, accessToken()); wake.seen(url, s); return s; }, wake.stuck);
 /** `?engine=local` (the installer opens the page with it): Measure then uses the local engine by itself, as a click on the button would.
  *  Never in Safari, which blocks the call: the page shows its Safari card as usual. */
 export const wantsLocal = (search: string, safari = SAFARI) => !safari && new URLSearchParams(search).get("engine") === "local";
+/** The local engine's Patients frame, only when that engine says it serves one (an older one goes straight to the drop-down), and never in Safari, which blocks it. */
+export const localFrame = (picker: boolean | undefined, safari = SAFARI) => (picker && !safari ? LOCAL_ENGINE : undefined);
 
 /** The live tool. Nothing calls localhost until the visitor clicks the button; the practice servers are asked at once. */
-export function Measure({ uid, onDemo, onInstall }: { uid: string; onDemo: () => void; onInstall: () => void }) {
+export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string; onDemo: () => void; onInstall: () => void;
+  cross?: { scan: string; z: number; y: number; x: number; tone?: "add" | "remove" }; onScan?: (scan: string | undefined, patients: Patients | null | undefined) => void }) { // the tutorial's two hooks into App
   const [engine, setEngine] = useState<Engine>({ state: "idle" });
   const [practice, setPractice] = useState<{ url: string; state: PracticeState }>();
   const [blocked, setBlocked] = useState<string>(); // a practice server's refusal (401, 423) or stop during use, in the page's own words
   const [asking, setAsking] = useState(false); // Try again waits for an answer
   const choseLocal = useRef(false); // once the visitor picks the local engine, the page never moves them to a practice server by itself
+  const [idle, setIdle] = useState(false); // no click for IDLE_STOP_MS: the asking stopped until Try again
+  const clicked = useRef(Date.now());
+  useEffect(() => { const on = () => { clicked.current = Date.now(); }; addEventListener("click", on, true); return () => removeEventListener("click", on, true); }, []);
   const [waiting, setWaiting] = useState<{ n: number; note?: string }>({ n: 0 });
   const [newestWaits, setNewestWaits] = useState(false); // the newest Record's save waits: its own amber box in the panel says so
   const [open, setOpen] = useState(false); // an unrecorded outline is on the page (App says so)
@@ -89,29 +101,32 @@ export function Measure({ uid, onDemo, onInstall }: { uid: string; onDemo: () =>
   const connect = (server?: string) => {
     if (!server) choseLocal.current = true;
     const mine = ++attempt.current;
-    setBlocked(undefined);
+    setBlocked(undefined); setIdle(false); // a connect is a click: the idle stop ends
     setEngine({ state: "trying", local: !server });
     setAuth(server && accessToken());
     probeEngine(server ?? LOCAL_ENGINE, server ? PROBE_MS : LOCAL_PROBE_MS).then(
-      (info) => { if (mine !== attempt.current) return; setApiBase(server ?? LOCAL_ENGINE, !!server); setEngine({ state: "live", commit: info.commit, model: info.model, practice: server }); },
+      (info) => { if (mine !== attempt.current) return; setApiBase(server ?? LOCAL_ENGINE, !!server); setEngine({ state: "live", commit: info.commit, model: info.model, practice: server, picker: info.picker === true }); },
       () => { if (mine !== attempt.current) return; setAuth(undefined); setEngine({ state: server ? "idle" : "none" }); if (server) setPractice({ url: server, state: "unavailable" }); },
     );
   };
   // Ask every practice server now and every 10 s until an engine is live. A server that never answers costs the probe's time limit, in the background.
   // After "starting", a ready answer connects by itself, as that message promises, unless the visitor chose the local engine.
   useEffect(() => {
-    if (!PRACTICE.length || live) return;
+    if (!PRACTICE.length || live || idle) return;
     let alive = true, woke = false; // woke: "starting" was shown, so a later ready connects by itself (also after an unreachable answer in between)
-    const ask = () => askAll().then((s) => {
-      if (!alive) return;
-      if (s.state === "starting") woke = true;
-      if (s.state === "ready" && woke && !choseLocal.current) connect(s.url);
-      setPractice(s);
-    });
+    const ask = () => {
+      if (Date.now() - clicked.current >= IDLE_STOP_MS) { setIdle(true); return; } // no ask, so a sleeping server stays asleep
+      askAll().then((s) => {
+        if (!alive) return;
+        if (s.state === "starting") woke = true;
+        if (s.state === "ready" && woke && !choseLocal.current) connect(s.url);
+        setPractice(s);
+      });
+    };
     ask();
     const timer = setInterval(ask, 10_000);
     return () => { alive = false; clearInterval(timer); };
-  }, [live]);
+  }, [live, idle]); // Try again (idle false) asks at once and goes on asking
   // A 423 during use: another free practice server takes over by itself; busy shows until one does.
   useEffect(() => {
     const others = PRACTICE.filter((u) => u !== inUse);
@@ -133,12 +148,12 @@ export function Measure({ uid, onDemo, onInstall }: { uid: string; onDemo: () =>
   const leave = () => {
     attempt.current++; // a check still running for the old engine (Try again, the move after "in use", a slow connect) gives up
     void releaseSession(); // reads the server and the token now, before they are cleared
-    setAuth(undefined); setApiBase(""); setBlocked(undefined); setAsked(false); setOpen(false); setEngine({ state: "idle" });
-    newest = undefined; setNewestWaits(false); // M2: the next engine starts with no "newest Record waits"
+    setAuth(undefined); setApiBase(""); setBlocked(undefined); setAsked(false); setOpen(false); setEngine({ state: "idle" }); setIdle(false);
+    newest = undefined; setNewestWaits(false); // the next engine starts with no "newest Record waits"
   };
   if (engine.state === "live") {
     const gone = blocked === PRACTICE_STOPPED, busy = blocked === IN_USE; // shown once, in the image area; a stop also turns the line amber
-    const asking = asked && open; // M1: once the outline is recorded or dropped, the question goes
+    const asking = asked && open; // once the outline is recorded or dropped, the question goes
     const canChange = !(SAFARI && engine.practice); // in Safari the only other choice is disabled: Change would just free the server for someone else
     const line = asking ? { cls: "warn", text: CHANGE_ASK, alert: true }
       : !engine.practice ? { cls: "ok", text: "Your own computer" }
@@ -153,7 +168,8 @@ export function Measure({ uid, onDemo, onInstall }: { uid: string; onDemo: () =>
             : canChange && <><span aria-hidden="true"> · </span><button className="shell-link" onClick={() => (open ? setAsked(true) : leave())}>Change</button></>}</span>
           {wait && <span className="shell-wait">{wait}</span>}
         </div>
-        <div className="measure-sheet"><App embedded folders={false} onOpen={setOpen}
+        {/* the local engine: the Patients panel in its frame */}
+        <div className="measure-sheet"><App embedded panel={!!engine.practice} frame={engine.practice ? undefined : localFrame(engine.picker)} onOpen={setOpen} cross={cross} onScan={onScan}
           onRecorded={(row, scan, report) => {
             const e = toEntities(row, scan, engine);
             newest = row.outline_file; setNewestWaits(false);
@@ -193,7 +209,7 @@ export function Measure({ uid, onDemo, onInstall }: { uid: string; onDemo: () =>
       {none}
     </section>
   );
-  const ready = practice?.state === "ready" ? practice : undefined, s = practice?.state;
+  const s = idle ? "idle" : practice?.state, ready = s === "ready" ? practice : undefined;
   const btn = (label: string, onClick: () => void, primary = false, disabled = trying) => <button className={primary ? "shell-btn primary" : "shell-btn"} onClick={onClick} disabled={disabled}>{label}</button>;
   const install = toInstall("How to install it");
   return (
@@ -208,16 +224,18 @@ export function Measure({ uid, onDemo, onInstall }: { uid: string; onDemo: () =>
         </div>
         <p className="shell-note">{SLOW}</p>
       </> : <>
-        {s && s !== "ready" && <p className="shell-status" role="status">{s === "starting" && <span className="shell-spinner" aria-hidden="true" />}{SAYS[s]}</p>}
+        {s && s !== "ready" && <p className="shell-status" role="status">{s === "starting" && <span className="shell-spinner" aria-hidden="true" />}{SAYS[s]}{s === "paused" && <> ({install}).</>}</p>}
         <div className="shell-actions">
           {s === "paused" && btn("Open the Demo", onDemo, true, false)}
           {s === "starting" && btn("Open the Demo meanwhile", onDemo, true, false)}
           {s === "busy" && btn("Try again", tryAgain, true, asking)}
+          {s === "idle" && btn("Try again", () => { setPractice(undefined); setIdle(false); /* a 15-minute-old answer is not shown as now */ }, true, false)}
+          {s === "idle" && btn("Open the Demo", onDemo, false, false)}
           {s === "busy" && btn("Open the Demo", onDemo, false, false)}
           {SAFARI && (!s || s === "unavailable") && btn("Open the Demo", onDemo, true, false)}
           {local("Use my local engine", !s || s === "unavailable")}
         </div>
-        <p className="shell-note">{install} · {REAL_DATA_NOTE}</p>
+        <p className="shell-note">{s !== "paused" && <>{install} · </>}{REAL_DATA_NOTE}</p>{/* paused: the link is in the line above, once on the card */}
       </>}
       {none}
     </section>
@@ -241,8 +259,17 @@ export function Refused({ message }: { message: string }) {
   );
 }
 
+const STORE = (() => { try { return localStorage; } catch { return undefined; } })(); // reading localStorage itself can throw where storage is blocked
+
 export function Shell() {
   const [session, setSession] = useState<Session>();
+  // Tutorial mode: offered once per browser, and the Tutorial button starts it at any time. It reads the page and acts on nothing; Exit keeps every Record.
+  const [tutorial, setTutorial] = useState<"off" | "offer" | "on">(() => (shouldOffer(STORE, !!navigator.webdriver) ? "offer" : "off"));
+  const [tour, setTour] = useState({ run: 0, step: undefined as string | undefined, scan: undefined as string | undefined, n: undefined as number | undefined });
+  const onScan = useCallback((scan: string | undefined, p: Patients | null | undefined) => setTour((t) => (t.scan === scan && t.n === practiceN(p) ? t : { ...t, scan, n: practiceN(p) })), []);
+  const onStep = useCallback((step?: string) => setTour((t) => (t.step === step ? t : { ...t, step })), []);
+  const startTour = () => { markOffered(STORE); setTour((t) => ({ ...t, run: t.run + 1, step: undefined })); setTutorial("on"); }; // no step from an earlier run: no stale cross
+  useEffect(() => { if (tutorial === "offer" && session?.kind === "user") markOffered(STORE); }, [tutorial, session?.kind]); // offered once: when it shows
   const [tab, setTab] = useState<Tab | "Install">("Measure"); // Install: Run it on your computer, a view without a tab
   const [seen, setSeen] = useState<Tab[]>(["Measure"]); // Measure stays mounted once opened, so a scan and its table survive a tab change
   const about = useRef<HTMLDialogElement>(null);
@@ -259,11 +286,14 @@ export function Shell() {
         <div className="shell-tabs" role="tablist">
           {TABS.map((t) => <button key={t} role="tab" aria-selected={tab === t} className="shell-tab" onClick={() => pick(t)}>{t}</button>)}
         </div>
+        <button className="shell-btn" onClick={(e) => { if (e.detail > 0) e.currentTarget.blur(); startTour(); }}>Tutorial</button>{/* blurred after a mouse click, so Enter records */}
         {/* the waiting line goes before the name: the group is right-aligned, so the name and Sign out stay where they are */}
         <div className="shell-user">{left > 0 && <span role="status" className="shell-left">{signOutLine(left)}</span>}<span>Signed in as {user.email}</span><button className="shell-btn" onClick={() => signOut()}>Sign out</button></div>
       </header>
+      {tutorial !== "off" && <Coach key={tour.run} mode={tutorial} scan={tour.scan} patientN={tour.n} onStart={startTour} onDecline={() => setTutorial("off")} onLater={() => { unmarkOffered(STORE); setTutorial("off"); }} onExit={() => setTutorial("off")} onStep={onStep} />}
       <main className="shell-main">
-        {seen.includes("Measure") && <div hidden={tab !== "Measure"}><Measure uid={user.id} onDemo={() => pick("Demo")} onInstall={() => setTab("Install")} /></div>}
+        {seen.includes("Measure") && <div hidden={tab !== "Measure"}><Measure uid={user.id} onDemo={() => pick("Demo")} onInstall={() => setTab("Install")}
+          cross={tutorial !== "on" ? undefined : tour.step === "cross" ? CASE.cross : tour.step === "correct" ? CASE.fix : undefined} onScan={tutorial === "on" ? onScan : undefined} /></div>}
         {tab === "Study table" && <StudyView onRemove={(scanRef, m, reason) => box.remove(scanRef, m, reason)} waiting={box.waiting} pending={box.pending} onGoToMeasure={() => pick("Measure")} />}
         {tab === "Demo" && <DemoView />}
         {tab === "Install" && <InstallView onBack={() => pick("Measure")} />}

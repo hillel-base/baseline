@@ -28,9 +28,9 @@ test("with no practice server configured, Measure keeps its first-click card: th
   expect(html).not.toMatch(/practice/i);
   expect(html).toContain("For real patient data, use the tool&#x27;s own page on your computer (http://localhost:8000), not this page."); // until the scan list shows codes instead of folder names
 });
-test("the folder button shows for the local engine and not for a practice server", () => {
-  expect(renderToString(<App embedded />)).toContain("Open a CT folder…");
-  expect(renderToString(<App embedded folders={false} />)).not.toContain("Open a CT folder…");
+test("no page has the top-bar Open a CT folder… button: folders open through the Patients panel", () => {
+  expect(renderToString(<App />)).not.toContain("Open a CT folder…"); // folders open only through the Patients panel's Change folder…
+  expect(renderToString(<App embedded />)).not.toContain("Open a CT folder…");
 });
 
 test("isSafari: Safari on Mac and iPhone yes; Chrome, Edge, Firefox (which also say Safari or Gecko) no", async () => {

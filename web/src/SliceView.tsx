@@ -1,13 +1,16 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getSlice as getSliceApi, postEvent as postEventApi, type Outline, type Pt, type ScanMeta } from "./api";
 import { addPoint, aimedHere, axisLabels, edgePixels, imageInput, lineMm, loadingCue, nearestEnd, sliceLabel, upLabel, stepZ, toVoxel, unpackMask, wheelNotches, wheelStep, windowToRGBA, zOfImage } from "./image";
+import { tickGroups } from "./list";
 import { sliceQueue, wishes } from "./slices";
 import { MAX_SCALE, STEP, centreOn, fitView, gestureLog, imageToScreen, panBy, screenToImage, wheelFactor, zoomAt, zoomToRect, type Rect, type Size, type View } from "./view";
 
 type Props = { scan: ScanMeta; z: number; onZ: (z: number) => void; outline?: Outline; pending: boolean; onPick: (p: { y: number; x: number; shift: boolean }) => void; caption?: string[];
-  load?: (id: string, z: number, signal?: AbortSignal) => Promise<Int16Array>; target?: { z: number; y: number; x: number; label?: string }; // load: another slice source (the Demo, which also sends no events); target: a ring on the spot to click (with a label: a follow-up proposal, in yellow)
+  load?: (id: string, z: number, signal?: AbortSignal) => Promise<Int16Array>; target?: { z: number; y: number; x: number; label?: string; tone?: "add" | "remove" }; // load: another slice source (the Demo, which also sends no events); target: a ring on the spot to click (with a label: a follow-up proposal, in yellow; with a tone: the tutorial's correction, one small ring in the + or - mark's colour)
   brush?: { radius: number; erase: boolean }; onStroke?: (z: number, points: Pt[]) => void; // brush: Paint or Erase on an open outline, so a press paints instead of clicking; one stroke is sent on release
-  onAxes?: (long: [Pt, Pt], short: [Pt, Pt]) => void }; // Axes mode on an open outline: a press is never a click; the axis ends on axis_z have handles, and a real drag of one sends both lines
+  onAxes?: (long: [Pt, Pt], short: [Pt, Pt]) => void; // Axes mode on an open outline: a press is never a click; the axis ends on axis_z have handles, and a real drag of one sends both lines
+  suggestions?: { z: number; y: number; x: number; rank: number; off: boolean; measured?: number }[]; corner?: ReactNode; // the finder's: numbered dashed rings on their images and ticks on the slice bar; corner: the finder's button, at the end of the counter line
+  onShown?: (z: number) => void }; // the indicator's slice is on the canvas (also when the indicator moves to a slice already there)
 /** A brush stroke on slice z, or a grabbed axis end (line 0 long, 1 short) now at `at`; sent: released and waiting for the engine, still drawn. */
 type Gesture = ({ kind: "paint"; z: number; pts: Pt[] } | { kind: "axis"; line: 0 | 1; end: 0 | 1; from: Pt; sx: number; sy: number; at: Pt; moved: boolean }) & { sent?: boolean };
 const HANDLE_PX = 8; // a press this close to an axis end grabs it
@@ -28,14 +31,18 @@ function wrap(g: CanvasRenderingContext2D, line: string, max: number) {
   return [...out, cur];
 }
 const HALO = "rgba(0,0,0,0.7)", HALO_RGBA = [0, 0, 0, 178]; // the thin dark edge under every overlay
-export type SliceViewHandle = { toPNG: () => Promise<Blob>; centre: (y: number, x: number) => void }; // centre: that voxel to the middle of the view, zoom unchanged
+const OK = "#70b280"; // theme.css --ok: a measured suggestion's ring
+export type SliceViewHandle = { toPNG: () => Promise<Blob>; centre: (y: number, x: number) => void; shown: () => number | undefined }; // centre: that voxel to the middle of the view, zoom unchanged; shown: the slice on the canvas
 
-export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({ scan, z, onZ, outline, pending, onPick, caption = [], load, target, brush, onStroke, onAxes }, ref) {
+export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({ scan, z, onZ, outline, pending, onPick, caption = [], load, target, brush, onStroke, onAxes, suggestions, corner, onShown }, ref) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const overlay = useRef<HTMLCanvasElement>(null);
   const queues = useRef(new Map<string, ReturnType<typeof sliceQueue>>()); // by scan; both callers remount the view on a scan change, so it holds one
   const onCanvas = useRef<{ scan: string; z: number }>(); // the slice on the canvas
   const [shownZ, setShownZ] = useState<number>(); // the same z, for the render: overlays and input wait until it is the indicator's z
+  const shownCb = useRef(onShown);
+  shownCb.current = onShown;
+  useEffect(() => { if (shownZ === z) shownCb.current?.(z); }, [shownZ, z]);
   useEffect(() => () => queues.current.forEach((q) => q.stop()), []); // unmounted (also a scan change): nothing keeps downloading
   const [depth, rows, cols] = scan.shape;
   const inst = scan.instance_numbers;
@@ -145,6 +152,16 @@ export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({
     if (lines && z === lines.axis_z && onAxes && !pending) // a handle on each axis end: a hollow ring in the line's colour, so the outline under it stays visible
       for (const [line, colour] of [[lines.long_line, "#ff4fd8"], [lines.short_line, "#40c0ff"]] as const)
         for (const p of line ?? []) for (const [col, w] of [[HALO, 3.5], [colour, 1.5]] as const) { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.arc(...at(...p), 4, 0, 2 * Math.PI); g.stroke(); }
+    const rings = (suggestions ?? []).filter((m) => m.z === z && !m.off);
+    c.dataset.suggestions = JSON.stringify(rings.map((m) => [m.rank, ...at(m.y, m.x), m.measured ? 1 : 0]));
+    g.font = "600 12px ui-monospace, monospace"; g.textAlign = "center"; g.textBaseline = "middle";
+    for (const m of rings) { // a dashed white ring with its number up and right, as in the list and on the slice bar; solid green once measured
+      const [px, py] = at(m.y, m.x), t = String(m.rank), w = g.measureText(t).width + 10, fg = m.measured ? OK : "#fff";
+      for (const [col, lw, dash] of [[HALO, 4, []], [fg, 2, m.measured ? [] : [6, 4]]] as const) { g.strokeStyle = col; g.lineWidth = lw; g.setLineDash(dash); g.beginPath(); g.arc(px, py, 19, 0, 2 * Math.PI); g.stroke(); }
+      g.setLineDash([]);
+      g.beginPath(); g.roundRect(px + 19 - w / 2, py - 27, w, 16, 8); g.strokeStyle = HALO; g.lineWidth = 2; g.stroke(); g.fillStyle = fg; g.fill();
+      g.fillStyle = "#000"; g.fillText(t, px + 19, py - 18.5);
+    }
     g.font = "bold 20px system-ui";
     g.textAlign = "center";
     g.textBaseline = "middle";
@@ -171,17 +188,19 @@ export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({
     if (target && target.z === z) { // two rings, dark under white (yellow for a proposal), distinct from the + and - marks
       const [px, py] = at(target.y, target.x), fg = target.label ? "#ffdc00" : "#fff";
       c.dataset.target = JSON.stringify([px, py]);
-      for (const [r, col, w] of [[16, HALO, 5], [16, fg, 2], [6, HALO, 4], [6, fg, 1.5]] as const) { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.arc(px, py, r, 0, 2 * Math.PI); g.stroke(); }
+      const tone = target.tone && (target.tone === "add" ? "#22c55e" : "#ef4444");
+      for (const [r, col, w] of tone ? [[8, HALO, 5], [8, tone, 2.5]] as const : [[16, HALO, 5], [16, fg, 2], [6, HALO, 4], [6, fg, 1.5]] as const) { g.strokeStyle = col; g.lineWidth = w; g.beginPath(); g.arc(px, py, r, 0, 2 * Math.PI); g.stroke(); }
       if (target.label) { // the label up and right of the ring
         g.font = "bold 14px system-ui"; g.textAlign = "start"; g.textBaseline = "alphabetic"; g.lineWidth = 3; g.lineJoin = "round";
         g.strokeStyle = HALO; g.strokeText(target.label, px + 16, py - 16); g.fillStyle = fg; g.fillText(target.label, px + 16, py - 16);
       }
     }
-  }, [outline, z, scan, view, resized, target, pending, ring, gesture, brush?.radius, brush?.erase, hoverPx, space, areaMode, overHandle, !!onAxes]);
+  }, [outline, z, scan, view, resized, target, pending, ring, gesture, brush?.radius, brush?.erase, hoverPx, space, areaMode, overHandle, !!onAxes, suggestions]);
 
   // The recorded slice at full resolution (outline and axis lines, no click marks) with a caption strip under it.
   useImperativeHandle(ref, () => ({
     centre(y: number, x: number) { setView(centreOn(viewRef.current, x + 0.5, y + 0.5, sizeNow())); },
+    shown: () => (onCanvas.current?.scan === scan.id ? onCanvas.current.z : undefined),
     async toPNG() {
       const o = outline!, hu = queueFor(scan.id).have.get(o.axis_z!) ?? (await getSlice(scan.id, o.axis_z!));
       const layer = (draw: (g: CanvasRenderingContext2D) => void) => {
@@ -402,11 +421,14 @@ export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({
 
   return (
     <div className="m-slice">
-      <div className="m-counter" aria-live="polite">
+      <div className="m-counter">
+        <div className="m-live" aria-live="polite">{/* the finder's drop-down stays out of this live region */}
         <span className="count num">{sliceLabel(z, inst, depth)}</span>
         {up && <span className="small muted">{up}</span>}
         {outline && z === outline.axis_z && input.overlays && <span className="m-pill"><span className="dot" aria-hidden="true" />Largest slice</span>}
         {failed !== undefined && <span role="alert" className="small" style={{ color: "var(--warn)" }}>{`Could not load ${inst ? `image ${inst[failed]}` : `slice index ${failed + 1}`}. Scroll to retry.`}</span>}
+        </div>
+        {corner && <><span className="grow" />{corner}</>}
       </div>
       <div className="m-stage">
         <div className="m-fit">
@@ -457,6 +479,10 @@ export const SliceView = forwardRef<SliceViewHandle, Props>(function SliceView({
           <span aria-hidden="true">{top}</span>
           <div className="m-track">
             {band && <div className="m-band" style={{ top: `calc(${band[0]} * (100% - 16px) + 3px)`, height: `calc(${band[1] - band[0]} * (100% - 16px) + 10px)` }} />}
+            {tickGroups((suggestions ?? []).map((m) => ({ rank: m.rank, f: frac(shown(m.z)), off: m.off }))).map((t) => ( // the finder's suggestions on the slice bar: where to look
+              <div key={t.ranks[0]} className={t.off.every(Boolean) ? "m-tick off" : "m-tick"} data-ranks={t.ranks.join(",")} style={{ top: `calc(${t.f} * (100% - 16px) + 6.5px)` }}>
+                <span>{t.ranks.map((r, i) => <span key={r} className={t.off[i] ? "off" : undefined}>{i > 0 && "·"}{r}</span>)}</span></div>
+            ))}
             {/* min at the top: up on the screen is the lower image number, as the arrow keys go */}
             <input type="range" className="m-range" aria-label="Image slider" min={lo} max={hi} value={shown(z)}
               onChange={(e) => onZ(inst ? zOfImage(+e.target.value, inst) : +e.target.value - 1)} onPointerUp={(e) => e.currentTarget.blur()} />

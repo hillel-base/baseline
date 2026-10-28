@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ENGINE_STOPPED, PRACTICE_STOPPED, PRACTICE_TEXTS, correctNodule, getInfo, getScan, listScans, mapPoint, paintStroke, postEvent, recordNodule, setAxes, startNodule, undoClick, type Link, type Outline, type Pt, type ScanMeta, type ScanRow } from "./api";
+import { ENGINE_STOPPED, PRACTICE_STOPPED, PRACTICE_TEXTS, correctNodule, findCandidates, getCopilot, getInfo, getScan, listPatients, listScans, mapPoint, paintStroke, postEvent, recordNodule, setAxes, startNodule, undoClick, type Link, type Outline, type Patients, type Pt, type ScanMeta, type ScanRow } from "./api";
 import { clickKind, dropsNodule, isEmpty, type Mode } from "./clicks";
 import { distanceMm, earlierRows, firstClick } from "./followup";
 import { backUpRows, captionLines, forgetCleared, loadCleared, loadCounters, loadRecorded, nextNodule, reloadFor, restoreCleared, saveCounters, saveRecorded, rememberScanId, scanIdOf, scanKey, screenshotName, toCSV, toRow, toTSV, type RecordedNodule } from "./record";
 import type { SaveState } from "./study";
 import { About } from "./About";
-import { FolderPanel } from "./FolderPanel";
+import { Copilot } from "./Copilot";
 import { Earlier, Panel } from "./Panel";
+import { PatientsFrame, countsOf } from "./PatientsFrame";
+import { PatientsPanel } from "./PatientsPanel";
 import { RecordedTable } from "./RecordedTable";
 import { SliceView, type SliceViewHandle } from "./SliceView";
+import { HOLD, ranked, withMeasured, type Finds, type Ranked } from "./list";
 import { keyFor, restoreRow } from "./ui";
 import lockup from "./assets/lockup-dark.svg";
 
@@ -24,6 +27,7 @@ const COPY_FAILED = "Copy failed. Select the row and copy it by hand.";
 const AXES_CLEARED = "Axes measured again: that change replaced the axes you set by hand. U takes it back.";
 
 const K = ({ k }: { k: string }) => <kbd className="k">{k}</kbd>;
+const STEPS = "The patient's previous or next scan (beside the Patients button)";
 const SHORTCUTS: [ReactNode, string][] = [
   [<><K k="↑" /> <K k="↓" /> or wheel</>, "Previous or next image"], [<K k="A" />, "Add mode"], [<K k="R" />, "Remove mode"],
   [<>Hold <K k="Shift" /></>, "Remove for one click"], [<K k="P" />, "Paint mode: drag on the image to paint"], [<K k="E" />, "Erase mode: drag on the image to erase"],
@@ -31,6 +35,7 @@ const SHORTCUTS: [ReactNode, string][] = [
   [<K k="X" />, "Axes mode: drag an end of an axis line on the largest slice to set that axis by hand"], [<K k="U" />, "Undo the last action: a click, a stroke or a dragged axis"], [<K k="S" />, "Start over: throw away this outline, same nodule"],
   [<K k="G" />, "Go to the largest slice"], [<><K k="+" /> <K k="−" /></>, "Zoom in or out (= also zooms in)"], ["Ctrl+wheel, pinch", "Zoom about the cursor"],
   [<><K k="Space" />+drag</>, "Pan"], [<K k="Z" />, "Zoom to area: drag a rectangle (Esc cancels)"], [<K k="F" />, "Fit: the whole image, 100 %"],
+  [<><K k="Alt" />+<K k="←" /> <K k="Alt" />+<K k="→" /></>, STEPS],
   [<K k="Enter" />, "Record nodule"], [<K k="N" />, "New nodule"], [<K k="M" />, "Measure here: outline the proposed nodule (follow-up scan)"], [<K k="?" />, "Show these shortcuts"],
 ];
 
@@ -46,19 +51,24 @@ export function download(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 }
 
-// embedded: the hosted shell supplies the heading and the footer; folders: false on the hosted page, which opens none;
+// embedded: the hosted shell supplies the heading and the footer. Folders open only through the Patients panel (its Change folder…), on the engine's own page or in its frame.
 // overlay: a practice server's busy or stopped message, shown once, in the image area in place of the image.
 // onRecorded: the hosted page saves the row and reports its state; onUndoRecord: it takes the save back (and may resolve to a line that replaces "Record undone.");
 // knownNodules: the highest nodule number the study table already holds for a scan. onOpen: told whether an unrecorded outline is on the page (the Shell's Change asks first then).
-export function App({ embedded = false, folders = true, overlay, onRecorded, onUndoRecord, knownNodules, onOpen }: { embedded?: boolean; folders?: boolean; overlay?: ReactNode;
+// panel: false keeps the Scan drop-down (codes) and never asks /api/patients: the hosted page with the local engine, which that route refuses.
+// frame: that engine's address; the Patients panel then comes from it, in a frame this page cannot read, with the drop-down as its fallback.
+// Tutorial mode (hosted, both optional, nothing changes without them): cross, a ring on that voxel of that scan (SliceView's target: white, or with a tone
+// the small ring of a correction) while no follow-up proposal shows, and the viewer goes to its slice once; onScan, told the open scan and the patient list,
+// which the tour cannot read in the frame.
+export function App({ embedded = false, panel = true, frame, overlay, onRecorded, onUndoRecord, knownNodules, onOpen, cross, onScan }: { embedded?: boolean; panel?: boolean; frame?: string; overlay?: ReactNode;
   onRecorded?: (row: RecordedNodule, scan: ScanMeta, report: (s: SaveState) => void) => void;
-  onUndoRecord?: (row: RecordedNodule) => Promise<string | undefined> | void; knownNodules?: (scan: ScanMeta) => Promise<number>; onOpen?: (open: boolean) => void }) {
+  onUndoRecord?: (row: RecordedNodule) => Promise<string | undefined> | void; knownNodules?: (scan: ScanMeta) => Promise<number>; onOpen?: (open: boolean) => void;
+  cross?: Vox & { scan: string; tone?: "add" | "remove" }; onScan?: (scan: string | undefined, patients: Patients | null | undefined) => void }) {
   const [scans, setScans] = useState<ScanRow[]>();
   const [error, setError] = useState<string | boolean>(false); // the scan list failed: a practice server's own text, or true (the local engine is not running)
   const scansFailed = (e: Error) => setError(PRACTICE_TEXTS.includes(e.message) ? e.message : true);
   const [openFailed, setOpenFailed] = useState<string>();
   const [picked, setPicked] = useState("");
-  const [browsing, setBrowsing] = useState(false);
   const latest = useRef(0);
   const [loading, setLoading] = useState(false);
   const [scan, setScan] = useState<ScanMeta>();
@@ -77,6 +87,9 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
   const [current, setCurrent] = useState<RecordedNodule>(); // the row of the outline on the page, once recorded
   const [cleared, setCleared] = useState(() => loadCleared().length); // rows in the backup slot, out of view until Restore
   const [saved, setSaved] = useState<SaveState & { row: RecordedNodule }>(); // the study-table save of the row on the page (hosted only)
+  const [copilot, setCopilot] = useState(false); // the engine has a nodule finder and the co-pilot is on
+  const [finds, setFinds] = useState<Finds>(); // the finder's suggestions for the scan on the page
+  const fromMark = useRef<number>(); // the suggestion whose Measure started the nodule on the page (it counts even if an edit took its voxel out); a hand click, New nodule or a scan switch clears it
   const [notice, setNotice] = useState<string>();
   // Another tab changed the saved table: show its state, so this tab's next change builds on it.
   useEffect(() => {
@@ -98,9 +111,15 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
   const link = useRef<Link & { at: Vox }>();
   const earlierInst = useRef<Record<string, number[] | null>>({}); // the earlier scans' image numbers, read once per page
 
+  useEffect(() => { getCopilot().then(setCopilot); }, []);
   useEffect(() => { listScans().then(setScans, scansFailed); }, []);
+  const [patients, setPatients] = useState<Patients | null | undefined>(panel ? undefined : null); // undefined: the first GET waits; null: the drop-down stays (not asked, or the route failed or is missing)
+  useEffect(() => { if (panel) listPatients().then(setPatients, () => setPatients(null)); }, []);
   const [device, setDevice] = useState<string>(); // read once: "cpu" means the standard-PC mode (about 20 s a click); a failed read keeps the 2 s text
   useEffect(() => { getInfo().then((i) => setDevice(i.device), () => {}); }, []);
+  useEffect(() => { onScan?.(scan?.id, patients); }, [scan?.id, patients, onScan]);
+  const ring = cross && scan?.id === cross.scan ? cross : undefined;
+  useEffect(() => { if (ring) setZ(ring.z); }, [ring?.scan, ring?.z]); // once per cross: the viewer goes to its slice
 
   // An unrecorded outline with something in it is dropped by a scan switch or New nodule: say so, and log it.
   const discard = () => {
@@ -147,6 +166,7 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
     discard();
     const mine = ++latest.current;
     setCurrent(undefined);
+    setFinds(undefined); fromMark.current = undefined; measuring.current = undefined;
     setScan(undefined);
     setOutline(undefined);
     setOutlineError(undefined);
@@ -191,6 +211,7 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
     if (!scan) return;
     if (!keepClock.current) started.current = Date.now();
     keepClock.current = false;
+    fromMark.current = undefined; // a hand click starts this nodule, even after Start over on a suggestion's
     setNotice(undefined);
     setMode("add"); // a new nodule always starts in Add mode
     // a proposal on screen links this start; without one, a nodule restarted after Start over keeps its link, measured from the same proposal
@@ -239,13 +260,56 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
     } finally { if (mine === latest.current) setPending(false); }
   };
 
+  // The finder runs apart from the outline engine: clicks and measuring go on meanwhile. A scan switch drops its answer.
+  const findNodules = () => {
+    if (!scan) return;
+    const id = scan.id, mine = latest.current;
+    setFinds({ scan: id });
+    findCandidates(id).then((l) => { if (mine === latest.current) setFinds({ scan: id, list: ranked(l) }); },
+      (e) => { if (mine === latest.current) setFinds({ scan: id, error: e.message }); });
+  };
+  // Measure on a suggestion: a new nodule at exactly that voxel, as a first click there would start it. It follows no earlier nodule.
+  // ui-b's rule: a click never lands on another image than the indicator's. Measure goes to the suggestion's image and starts
+  // only once that image is on screen (onShown); if the indicator moves to another image first, nothing starts.
+  const measuring = useRef<Ranked>();
+  const measureMark = (c: Ranked) => {
+    if (!scan || pending || editable) return; // never drops an open outline, as the follow-up's Measure here
+    discard();
+    started.current = Date.now();
+    setProposal(undefined); link.current = undefined;
+    setZ(c.z); view.current?.centre(c.y, c.x); setMode("add");
+    if (z === c.z && view.current?.shown() === c.z) startMark(c);
+    else { measuring.current = c; setPending("outline"); }
+  };
+  const onShown = (k: number) => {
+    const c = measuring.current;
+    if (!c) return;
+    measuring.current = undefined;
+    if (k === c.z) startMark(c); else setPending(false);
+  };
+  const startMark = (c: Ranked) => {
+    if (!scan) return;
+    const id = scan.id, mine = latest.current;
+    run(() => startNodule(id, { z: c.z, y: c.y, x: c.x }).then((o) => {
+      setCurrent(undefined);
+      if (mine === latest.current) { postEvent({ action: "candidate_accept", scan: id, rank: c.rank, score: c.score }); fromMark.current = c.rank; } // only a start that succeeded
+      return o;
+    }), () => { setOutline(undefined); setCurrent(undefined); }, "start");
+  };
+  // Not a nodule, and its Undo: the row stays, struck through, with its ring gone and its tick greyed.
+  const toggleMark = (c: Ranked) => {
+    if (!scan) return;
+    postEvent({ action: c.off ? "undo_candidate_reject" : "candidate_reject", scan: scan.id, rank: c.rank, score: c.score });
+    setFinds((f) => (f?.list ? { ...f, list: f.list.map((x) => (x.rank === c.rank ? { ...x, off: !x.off } : x)) } : f));
+  };
+
   const record = () => {
     if (!scan || !outline || pending) return;
     const [mine, o, l] = [latest.current, outline, link.current];
     setPending("record");
     setOutlineError(undefined);
     recordNodule(o, l && { follows: l.follows, map_distance_mm: l.map_distance_mm }).then(
-      (file) => {
+      ({ outline_file: file, suggestions }) => {
         if (mine !== latest.current) return;
         const counters = loadCounters();
         const n = nextNodule(loadRecorded(), counters, scan.patient, scan.series);
@@ -255,6 +319,10 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
         saveCounters({ ...counters, [scanKey(scan.patient, scan.series)]: n });
         change((fresh) => [...fresh, row]);
         setCurrent(row);
+        // measured while this row is in the table: the suggestions the engine found inside the outline, and the one its Measure started from
+        const held = new Set([...(suggestions ?? []), ...(fromMark.current ? [fromMark.current] : [])]);
+        if (held.size) setFinds((f) => (f?.list && f.scan === scan.id ? { ...f, list: f.list.map((x) => (held.has(x.rank) ? { ...x, files: [...(x.files ?? []), file] } : x)) } : f));
+        fromMark.current = undefined;
         setSaved(undefined);
         onRecorded?.(row, scan, (s) => { setSaved({ row, ...s }); if (s.nodule !== undefined && s.nodule !== row.nodule) relabel(row, s.nodule); });
       },
@@ -320,33 +388,37 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
   const nodule = scan && (current?.nodule ?? nextNodule(rows, counters, scan.patient, scan.series));
   const earlier = useMemo(() => (scan ? earlierRows(rows, scan.patient, scan.series) : []), [rows, scan]);
   const label = proposal && `N${proposal.row.nodule}`;
+  const counts = useMemo(() => countsOf(rows), [rows]); // the frame's chips: codes and counts only
+  const select = (
+    <label className="m-pick">
+      Scan
+      <select value={picked} onChange={(e) => { open(e.target.value); e.target.blur(); }} disabled={!scans || !!pending}>
+        <option value="">{error === true ? "Engine not running" : error ? "Scans not available" : scans ? "Choose a scan" : "Loading scans…"}</option>
+        {[...byPatient].map(([patient, rows]) => (
+          <optgroup key={patient} label={patient}>
+            {rows.map((s) => <option key={s.id} value={s.id}>{s.id}</option>)}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  );
+  const measured = useMemo(() => withMeasured(finds?.list, rows), [finds, rows]);
 
   return (
     // A mouse click leaves no focus on a button, so Enter and the letter keys go to the page next, not to that button again.
     <div ref={root} className={embedded ? "m-app embedded" : "m-app"} onClick={(e) => { if (e.detail > 0) (e.target as Element).closest("button")?.blur(); }}>
       <header className="m-bar">
         {!embedded && <><Logo /><span className="m-tag">Research aid</span></>}
-        <span className="grow" />
-        <label className="m-pick">
-          Scan
-          <select value={picked} onChange={(e) => { open(e.target.value); e.target.blur(); }} disabled={!scans || !!pending}>
-            <option value="">{error === true ? "Engine not running" : error ? "Scans not available" : scans ? "Choose a scan" : "Loading scans…"}</option>
-            {[...byPatient].map(([patient, rows]) => (
-              <optgroup key={patient} label={patient}>
-                {rows.map((s) => <option key={s.id} value={s.id}>{s.id}</option>)}
-              </optgroup>
-            ))}
-          </select>
-        </label>
-        {folders && <button className="m-btn sm" onClick={() => setBrowsing((b) => !b)} disabled={!!pending}>Open a CT folder…</button>}
+        {patients !== null ? <PatientsPanel data={patients} current={picked} rows={rows} practice={embedded} busy={!!pending} onOpen={open} onChosen={setPatients} />
+          : frame ? <PatientsFrame engine={frame} current={picked} counts={counts} busy={!!pending} onOpen={open} fallback={select} /> : select}
       </header>
       <div className="m-main" role={embedded ? undefined : "main"}>
         <section className="m-viewer" aria-label="Image viewer">
-          {browsing && <FolderPanel onClose={() => setBrowsing(false)}
-            onOpened={(s) => { setBrowsing(false); listScans().then(setScans, scansFailed); open(s.id); }} />}
           {overlay ? <div className="m-empty">{overlay}</div> : scan ? (
-            <SliceView ref={view} caption={current ? captionLines(current) : undefined} scan={scan} z={z} onZ={setZ} outline={outline} pending={!!pending} onPick={pick} target={proposal?.at}
-              brush={editable && (mode === "paint" || mode === "erase") ? { radius: brush, erase: mode === "erase" } : undefined} onStroke={stroke} onAxes={editable && mode === "axes" ? dragAxes : undefined} />
+            <SliceView ref={view} caption={current ? captionLines(current) : undefined} scan={scan} z={z} onZ={setZ} outline={outline} pending={!!pending} onPick={pick} target={proposal?.at ?? ring}
+              brush={editable && (mode === "paint" || mode === "erase") ? { radius: brush, erase: mode === "erase" } : undefined} onStroke={stroke} onAxes={editable && mode === "axes" ? dragAxes : undefined}
+              suggestions={measured} onShown={onShown} corner={copilot && <Copilot key={scan.id} finds={finds && { ...finds, list: measured }} z={z} busy={!!pending || editable} hold={editable ? HOLD : undefined} onFind={findNodules}
+                onGo={(c) => { setZ(c.z); view.current?.centre(c.y, c.x); }} onMeasure={measureMark} onToggle={toggleMark} />} />
           ) : (
             <div className="m-empty">
               {error ? <p role="alert">{error === true ? "Engine not running. Start it with the command in README." : error}</p>
@@ -365,7 +437,7 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
           mode={mode} onMode={setMode} brush={brush} onBrush={setBrush} snap={snap} onSnap={setSnap} onUndo={() => outline && run(() => undoClick(outline), forget, "undo")} onStartOver={startOver}
           onGoToAxisSlice={() => outline?.axis_z != null && setZ(outline.axis_z)}
           // clears only the page: the engine keeps its nodule until the next click replaces it
-          onNew={() => { discard(); setCurrent(undefined); setOutline(undefined); setOutlineError(undefined); setMode("add"); setProposal(undefined); link.current = undefined; }}
+          onNew={() => { discard(); fromMark.current = undefined; setCurrent(undefined); setOutline(undefined); setOutlineError(undefined); setMode("add"); setProposal(undefined); link.current = undefined; }}
           nodule={nodule} idle={scan ? undefined : "Choose a scan, then click a nodule to outline it."} notice={notice} onKeys={() => keys.current?.showModal()} device={device}
           followup={earlier.length > 0 && <Earlier rows={earlier} proposed={proposal?.at && proposal.row.outline_file} busy={!!pending} open={!!outline && !current && !isEmpty(outline)} onFind={find} onMeasure={measureHere} />}
           finding={label && `Finding ${label} on this scan… about 15 s the first time`}
@@ -384,7 +456,7 @@ export function App({ embedded = false, folders = true, overlay, onRecorded, onU
       <dialog ref={keys} aria-label="Keyboard shortcuts" onClose={() => (document.activeElement as HTMLElement | null)?.blur()}>
         <h2>Keyboard shortcuts</h2>
         <table className="m-keys"><tbody>
-          {SHORTCUTS.map(([k, what]) => <tr key={what}><td>{k}</td><td>{what}</td></tr>)}
+          {SHORTCUTS.filter(([, what]) => what !== STEPS || patients !== null || !!frame).map(([k, what]) => <tr key={what}><td>{k}</td><td>{what}</td></tr>)}{/* the steps only where the Patients button shows (or its frame) */}
         </tbody></table>
         <form method="dialog"><button>Close</button></form>
       </dialog>

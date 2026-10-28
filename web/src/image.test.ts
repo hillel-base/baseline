@@ -130,7 +130,7 @@ test("loadingCue: no cue while the picture shows the indicator's slice; else the
 });
 
 const base = { space: false, areaMode: false, tool: false, panning: false, dragging: false, overHandle: false, pending: false, axes: false };
-test("imageInput: during the cue no overlay shows, any press is never a click (N1), and the cursor says loading, also over an Axes handle (N3)", () => {
+test("imageInput: during the cue no overlay shows, any press is never a click, and the cursor says loading, also over an Axes handle", () => {
   const cue = "Loading image 104…";
   expect(imageInput({ ...base, cue })).toEqual({ overlays: false, toolPress: true, cursor: "progress" }); // Add mode: a press now, released after the slice lands, is no click
   expect(imageInput({ ...base, cue, axes: true, tool: true, overHandle: true }).cursor).toBe("progress");

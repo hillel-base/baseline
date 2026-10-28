@@ -72,3 +72,10 @@ def test_header_tag_that_is_not_a_finite_number_is_none():
     assert _tag(Reader("nan"), "0018|0050", float) is None
     assert _tag(Reader(" inf "), "0018|0050", float) is None
     assert _tag(Reader("1.25"), "0018|0050", float) == 1.25
+
+
+def test_study_date_skips_a_picture_that_sorts_first(dicom_series):
+    from lung_engine.scans import study_date
+    d = dicom_series / "RIDER-TEST01" / "ct_test"
+    sitk.WriteImage(sitk.Image(4, 4, sitk.sitkUInt8), str(d / "+thumb.png"))  # SimpleITK reads a PNG, which has no StudyDate
+    assert study_date(d) == "2001-02-03"

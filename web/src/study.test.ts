@@ -27,6 +27,10 @@ test("timepoint 0 for test; method is tool edited after a correction; no instanc
   const bare = { ...scan, instance_numbers: null };
   expect(toEntities(toRow(bare, outline(1), 1, 1, "f"), bare, info).measurement.position_voxel[0]).toBe(1);
 });
+test("a study-folder scan's timepoint is the engine's (the order of its study day), never the RIDER rule's 0; undated keeps that rule", () => {
+  const study = (timepoint: number | null) => ({ ...scan, id: "F-0a1b2c3d", patient: "F-0a1b2c3d", series: "folder", timepoint });
+  for (const [tp, want] of [[0, 0], [1, 1], [3, 3], [null, 0]] as const) expect(toEntities(toRow(study(tp), outline(1), 1, 1, "f"), study(tp), info).scan.timepoint).toBe(want);
+});
 test("payloads hold no study date, outline file, path, UID or date other than approved_at", () => {
   const { scan: s, measurement: m } = make(2);
   for (const [name, o] of [["scan", s], ["measurement", m]] as const) {
@@ -281,7 +285,7 @@ test("Undo while the save is on its way waits for it: a removal if it was saved,
     expect(ctl.t.NoduleMeasurement.map((r) => r.removed_reason ?? "row")).toEqual(fails ? [] : ["row", "recorded by mistake"]);
   }
 });
-test("I-1: while a save hangs, a new Record is stored at once, so a reload keeps it; the reloaded page sends both", async () => {
+test("while a save hangs, a new Record is stored at once, so a reload keeps it; the reloaded page sends both", async () => {
   const { ctl, db } = fakeDb(), kv = memKv();
   const open = hold(ctl);
   const box = outbox(db, kv, me, { lock: solo }); // a reload frees the old page's lock

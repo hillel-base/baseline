@@ -15,7 +15,7 @@ test("the install view shows one command per system from TOOL_REPO_RAW, what hap
   for (const line of [
     "Run it on your computer",
     "The tool can run on your own computer, with the same three public practice scans. Research use only.",
-    "It also opens CT folders on your computer: on the tool's own page now, and on this page once the Patients panel is ready.",
+    "It also opens CT folders on your computer, with Change folder… in the Patients panel: on the tool's own page, and on this page in Chrome or Firefox.",
     "On a Mac or Linux, open Terminal and run:", MAC,
     "On Windows, open PowerShell and run:", WIN,
     "The first start installs the tool's packages and downloads the model weights and the three practice patients: about 1.8 GB on a Mac (about 3 GB more on Linux). It took about 5 minutes on a Mac with Apple silicon (our tests). Later starts are quick.",
@@ -58,10 +58,13 @@ test("Copy refused, or no Clipboard API at all: the plain line, never an uncaugh
   expect(COPY_FAILED).toBe("Copy failed. Select the command and copy it by hand.");
 });
 
-test("the hosted Shell's output has no github.com: How to install it opens the view in the page, not a new tab", async () => {
+test("the hosted Shell links no GitHub page but the public Baseline source in About: How to install it opens the view in the page, not a new tab", async () => {
   vi.stubEnv("VITE_PRACTICE_SERVERS", "https://practice.example"); // with a practice server the card shows How to install it
   const { Measure } = await import("./Shell");
   const card = renderToString(<Measure uid="u1" onDemo={() => {}} onInstall={() => {}} />);
   expect(card).toMatch(/<a href="#install">How to install it<\/a>/);
-  for (const html of [card, renderToString(<InstallView onBack={() => {}} />), renderToString(<About />)]) expect(html).not.toContain("github.com"); // the commands name raw.githubusercontent.com as text, never a link
+  for (const html of [card, renderToString(<InstallView onBack={() => {}} />)]) expect(html).not.toContain("github.com"); // the commands name raw.githubusercontent.com as text, never a link
+  const about = renderToString(<About />); // About links one page only: the public Baseline repository, the finder's AGPL source
+  expect(about).toContain('href="https://github.com/hillel-base/baseline"');
+  expect(about.replaceAll("github.com/hillel-base/baseline", "")).not.toContain("github.com");
 });

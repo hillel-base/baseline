@@ -1,15 +1,25 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { WAITING_LOCAL } from "../src/texts";
+import { FRAME_BLOCKED, WAITING_LOCAL } from "../src/texts";
 
 const imageReady = (page: Page) => expect(page.getByText(/^Loading (image|slice index) \d+…$/)).toHaveCount(0, { timeout: 30_000 }); // a click waits for the right image
 
 const PORT = process.env.LUNG_E2E_PORT ?? "8205"; // the same default as playwright.config.ts
 test.use({ viewport: { width: 1440, height: 900 } });
+// with the local engine, the Patients panel comes from the engine in a frame this page cannot read; a test opens a scan in it as a person does.
+const FRAME = 'iframe[title="Patients"]';
+const inFrame = (page: Page) => page.frameLocator(FRAME);
+async function openFromFrame(page: Page, patient = "RIDER-1286684383", open = /^Open Baseline/) {
+  const f = inFrame(page);
+  await f.locator('button[aria-haspopup="dialog"]').click();
+  const sheet = f.getByRole("dialog", { name: "Patients" });
+  await sheet.getByRole("searchbox", { name: "Search patients" }).fill(patient);
+  await sheet.getByRole("button", { name: open }).click();
+}
 async function outline(page: Page) {
   await page.getByRole("button", { name: "Use my local engine" }).click();
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 }); // "Your own computer · Change"
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openFromFrame(page);
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330]; // the expert outline's deepest voxel, as in slices.spec
@@ -72,6 +82,22 @@ test("hosted: signed in, three tabs, no localhost call before the button, then l
   await page.screenshot({ path: "e2e/screenshots/hosted-measure.png" });
 });
 
+test("hosted: Find nodules asks the local engine and lists the suggestions; no score shows", async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Use my local engine" }).click();
+  await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
+  await openFromFrame(page); // the frame takes the drop-down's place with the local engine
+  await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
+  await imageReady(page);
+  const asked = page.waitForRequest((q) => q.url() === `http://localhost:${PORT}/api/scans/RIDER-1286684383_test/candidates` && q.method() === "POST");
+  await page.getByRole("button", { name: "Find nodules" }).click();
+  await asked;
+  await expect(page.getByRole("region", { name: "Suggestions to check" }).getByRole("listitem")).toHaveCount(4, { timeout: 60_000 }); // the list opens by itself
+  await expect(page.getByRole("button", { name: /^Suggestions 4/ })).toHaveAttribute("aria-expanded", "true");
+  expect(await page.locator("body").innerText()).not.toMatch(/score/);
+});
+
 test("hosted: a failed probe shows the no-engine message, whose Run it on your computer link opens the install view", async ({ page }) => {
   await page.route(`http://localhost:${PORT}/**`, (r) => r.abort());
   await page.goto("/");
@@ -94,7 +120,7 @@ test("hosted: the local connect waits for a slow first answer, as while Chrome a
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Use my local engine" }).click();
-  await expect(page.getByRole("status").filter({ hasText: WAITING_LOCAL })).toBeVisible(); // the designed wait (gate minor 1), with its spinner
+  await expect(page.getByRole("status").filter({ hasText: WAITING_LOCAL })).toBeVisible(); // the designed wait, with its spinner
   await page.screenshot({ path: "e2e/screenshots/hosted-waiting-local.png" });
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText(NO_ENGINE)).toHaveCount(0);
@@ -413,7 +439,7 @@ test("hosted: on the Study table tab the arrow and zoom keys do not reach the hi
   await page.goto("/");
   await page.getByRole("button", { name: "Use my local engine" }).click();
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 }); // "Your own computer · Change"
-  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test");
+  await openFromFrame(page);
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const scan = await (await page.request.get(`http://localhost:${PORT}/api/scans/RIDER-1286684383_test`)).json();
@@ -453,8 +479,9 @@ const TEXT = {
   fast: "nothing to install, about 1 s per click",
   slow: "On a standard computer without a graphics card, a click takes about 20 s (our test).",
   live: "Practice server", // the name only
-  paused: "The practice server is paused right now.",
-  starting: "The practice server is starting. This takes about 4 minutes; the page connects by itself.",
+  paused: "The practice server is paused right now. To try the tool, open the Demo. To measure your own scans, run it on your computer (How to install it).", // the next step, for a first visit
+  starting: "The practice server is starting. This takes 1 to 4 minutes; the page connects by itself.", // a wake from sleep about 50 s, a cold start about 257 s
+  idle: "This page stopped asking the practice server after 15 minutes without a click.",
   unreachable: "The practice server is starting or cannot be reached. We will try again.",
   busy1: "The practice server is in use. It is free again after 10 minutes without use.",
   busy2: "Both practice servers are in use. One is free again after 10 minutes without use.",
@@ -484,6 +511,10 @@ async function practice(page: Page, info: Answer | ((auth?: string) => Answer), 
   return seen;
 }
 const card = (page: Page) => page.getByRole("region", { name: "Engine" });
+// A practice server's GET /api/patients (server mode): public RIDER codes as keys, "Practice patient N", no dates, no folder.
+const PRACTICE_PATIENTS = { status: 200, body: { folder: { path: null, from: null, error: null }, patients: ["RIDER-1286684383", "RIDER-2541949645", "RIDER-2619750334"].map((key, i) => ({
+  key, name: `Practice patient ${i + 1}`, source: "data",
+  scans: [{ id: `${key}_test`, timepoint: "Baseline", date: null, day: 0, label: "Test scan", slice_mm: null, images: 265 }, { id: `${key}_retest`, timepoint: "Follow-up", date: null, day: 0, label: "Retest scan", slice_mm: null, images: 269 }] })) } };
 
 test("practice: a free server gets the centred choice card; connected, the line names the server (only its name), every call carries the token, no commit, no folders", async ({ page }) => {
   const seen = await practice(page, engine(false));
@@ -512,6 +543,39 @@ test("practice: a free server gets the centred choice card; connected, the line 
   await shot(page, "connected");
 });
 
+test("practice: the Patients panel lists the practice patients with their labels, no folder footer and no drop-down; Open opens the scan and the button names it", async ({ page }) => {
+  test.setTimeout(120_000);
+  const seen = await practice(page, engine(false), (path) => (path === "/api/patients" ? PRACTICE_PATIENTS : SCANS));
+  // the scan itself comes from this run's engine (public RIDER data), so the picture shows a real image behind the panel
+  await page.route(new RegExp(`^${PRACTICE}/api/scans/RIDER-`), async (route) => { // the scan's info and its slices
+    const r = await route.fetch({ url: route.request().url().replace(PRACTICE, `http://localhost:${PORT}`), headers: {} });
+    await route.fulfill({ response: r, headers: { ...r.headers(), "access-control-allow-origin": new URL(page.url()).origin } });
+  });
+  await page.goto("/");
+  await card(page).getByRole("button", { name: "Practice server" }).click();
+  const picker = page.locator('button[aria-haspopup="dialog"]');
+  await expect(picker).toHaveText(/^Choose a scan/);
+  await expect(page.locator("select")).toHaveCount(0);
+  await picker.click();
+  const sheet = page.getByRole("dialog", { name: "Patients" });
+  await expect(sheet).toContainText("Practice patients · public scans");
+  await expect(sheet.getByRole("button", { name: /^Practice patient \d/ })).toHaveText(["Practice patient 1Baseline and follow-up", "Practice patient 2Baseline and follow-up", "Practice patient 3Baseline and follow-up"]);
+  await expect(sheet).toContainText("Practice patient 1RIDER Lung CT, TCIA");
+  const items = sheet.getByRole("listitem");
+  await expect(items).toHaveText(["Baselinenot measured yetOpen", "Follow-up · same daya repeat scan, for measuring twicenot measured yetOpen"]);
+  await expect(sheet).toContainText("Public practice scans only; no folders on a practice server.");
+  for (const no of ["Folder:", "Change folder…", "Names and dates", "Test scan"]) await expect(sheet.getByText(no)).toHaveCount(0);
+  await expect(sheet.getByRole("searchbox")).toHaveCount(0);
+  await sheet.getByRole("button", { name: /^Open Baseline/ }).click();
+  await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
+  await expect(picker).toHaveText(/^Practice patient 1 · Baseline/);
+  await expect(page.getByRole("button", { name: "Follow-up ›" })).toBeVisible();
+  await picker.click();
+  await expect(items.first()).toHaveText("Baselineopen nownot measured yetOpen");
+  await page.screenshot({ path: "e2e/screenshots/practice-patients-panel.png" });
+  expect(seen.filter((s) => s.path === "/api/patients")).toEqual([{ path: "/api/patients", auth: TOKEN }]); // asked once, signed in like every practice call
+});
+
 test("install: How to install it and the footer link open Run it on your computer in the page; Copy copies the command; Back to Measure returns", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await practice(page, engine(false));
@@ -525,7 +589,8 @@ test("install: How to install it and the footer link open Run it on your compute
   await expect(page.getByRole("tab")).toHaveCount(3); // a view, not a fourth tab
   await expect(page.getByRole("tab", { selected: true })).toHaveCount(0);
   expect(context.pages()).toHaveLength(1);
-  expect(await page.content()).not.toContain("github.com"); // the commands name raw.githubusercontent.com as text, never a link
+  expect(await view.innerHTML()).not.toContain("github.com"); // the commands name raw.githubusercontent.com as text, never a link
+  expect((await page.content()).replaceAll("github.com/hillel-base/baseline", "")).not.toContain("github.com"); // the one GitHub link: About's AGPL source
   await page.screenshot({ path: "e2e/screenshots/install-view.png" });
   const mac = "curl -fsSL https://raw.githubusercontent.com/hillel-base/baseline/main/install.sh | bash";
   const win = "irm https://raw.githubusercontent.com/hillel-base/baseline/main/install.ps1 | iex";
@@ -553,13 +618,15 @@ test("practice: the user who holds the server (after a reload) is offered it aga
   expect(seen.slice(0, 2)).toEqual([{ path: "/api/info", auth: undefined }, { path: "/api/info", auth: TOKEN }]);
 });
 
-test("practice: paused offers the Demo as the main button, the local engine next to it and the install link", async ({ page }) => {
+test("practice: paused says the next step and offers the Demo as the main button, the local engine next to it and the install link once", async ({ page }) => {
   const seen = await practice(page, { status: 503, body: "The space is paused, ask a maintainer to restart it" }); // a 503 page, although Hugging Face would refuse a preflight
   await page.goto("/");
   await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible();
   await expect(card(page).getByRole("button", { name: "Open the Demo" })).toHaveClass(/primary/);
   await expect(card(page).getByRole("button", { name: "Use my local engine" })).not.toHaveClass(/primary/);
-  await expect(card(page).getByRole("link", { name: "How to install it" })).toHaveAttribute("href", INSTALL);
+  await expect(card(page).getByRole("link", { name: "How to install it" })).toHaveCount(1); // in the paused line only, not again in the small print
+  await expect(card(page).getByRole("status").getByRole("link", { name: "How to install it" })).toHaveAttribute("href", INSTALL);
+  await expect(card(page).getByText("For real patient data, use the tool's own page on your computer (http://localhost:8000), not this page.", { exact: true })).toBeVisible(); // the small print, now without the link
   await expect(card(page).getByRole("button", { name: "Practice server" })).toHaveCount(0);
   expect(seen.length).toBeGreaterThan(0);
   expect(seen.every((s) => s.auth === undefined)).toBe(true);
@@ -567,6 +634,45 @@ test("practice: paused offers the Demo as the main button, the local engine next
   await card(page).getByRole("button", { name: "Open the Demo" }).click();
   await expect(page.getByRole("tab", { name: "Demo" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText(TEXT.demo)).toBeVisible();
+});
+
+// v0.1.1, automatic sleep: a forgotten tab must not keep the practice servers awake. Playwright's clock lets 15 minutes pass at once.
+test("practice: after 15 minutes without a click the card stops asking; Try again asks once more and the asking goes on; a click anywhere counts", async ({ page }) => {
+  await page.clock.install();
+  const seen = await practice(page, { status: 503, body: "The space is paused, ask a maintainer to restart it" });
+  await page.goto("/");
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible();
+  await page.clock.fastForward("14:50");
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible(); // 14 min 50 s: still asking
+  await page.clock.fastForward("00:20");
+  await expect(card(page).getByText(TEXT.idle, { exact: true })).toBeVisible();
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toHaveCount(0); // the last answer is old: not shown as now
+  await expect(card(page).getByRole("button", { name: "Try again" })).toHaveClass(/primary/);
+  await expect(card(page).getByRole("button", { name: "Open the Demo" })).toBeVisible();
+  await expect(card(page).getByRole("button", { name: "Use my local engine" })).toBeVisible();
+  await expect(card(page).getByRole("link", { name: "How to install it" })).toHaveCount(1);
+  await shot(page, "idle");
+  await card(page).getByRole("button", { name: "Use my local engine" }).click(); // the idle stop, then the local engine, then Change
+  await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "Change" }).click();
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible(); // asked at once, not "stopped asking"
+  await expect(card(page).getByText(TEXT.idle)).toHaveCount(0);
+  await page.clock.fastForward("15:10");
+  await expect(card(page).getByText(TEXT.idle, { exact: true })).toBeVisible(); // idle again after 15 more minutes without a click
+  const asked = seen.length;
+  await page.clock.fastForward("10:00");
+  await page.waitForTimeout(500);
+  expect(seen.length).toBe(asked); // nothing asked while it waits for a click
+  await card(page).getByRole("button", { name: "Try again" }).click();
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible();
+  expect(seen.length).toBeGreaterThan(asked);
+  await expect(card(page).getByRole("button", { name: "Try again" })).toHaveCount(0);
+  await page.clock.fastForward("10:00");
+  await card(page).getByRole("heading", { name: TEXT.title }).click(); // any click on the page restarts the 15 minutes
+  await page.clock.fastForward("10:00");
+  await page.waitForTimeout(500);
+  await expect(card(page).getByText(TEXT.paused, { exact: true })).toBeVisible();
+  await expect(card(page).getByText(TEXT.idle)).toHaveCount(0);
 });
 
 test("practice: starting shows a spinner and the Demo, keeps asking every 10 s, and connects by itself when the server answers", async ({ page }) => {
@@ -715,6 +821,18 @@ test.describe("two practice servers", () => {
     expect(second.some((s) => s.path === "/api/scans" && s.auth === TOKEN)).toBe(true);
   });
 
+  test("practice (automatic sleep): server 2 is never asked while server 1 is waking or free, so a visit wakes one T4", async ({ page }) => {
+    test.setTimeout(60_000);
+    let up = false;
+    await practice(page, (auth) => (up ? engine(false)(auth) : "hang")); // server 1 asleep: held open while it wakes
+    const second = await practice(page, engine(false), undefined, SECOND);
+    await page.goto("/");
+    await expect(card(page).getByText(TEXT.starting, { exact: true })).toBeVisible({ timeout: 15_000 });
+    up = true;
+    await expect(page.getByRole("status").filter({ hasText: LIVE_LINE })).toBeVisible({ timeout: 25_000 }); // connects by itself, as promised
+    expect(second).toEqual([]); // not one request: server 2 stayed asleep
+  });
+
   test("practice: a 423 during use moves to the other server by itself when it is free", async ({ page }) => {
     const first = await practice(page, engine(false), () => ({ status: 423, body: { detail: "raw engine words" } }));
     let secondFree = false;
@@ -744,11 +862,193 @@ test("hosted: the page never offers Open a CT folder: folder names stay on the e
   await page.goto("/");
   await page.getByRole("button", { name: "Use my local engine" }).click();
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByLabel("Scan")).toBeVisible();
+  await expect(inFrame(page).locator('button[aria-haspopup="dialog"]')).toBeVisible();
   await expect(page.getByRole("button", { name: "Open a CT folder…" })).toHaveCount(0);
   // and the engine refuses the hosted page's own folder request, with no CORS header for it to read
   const r = await page.evaluate(async (port) => { try { const x = await fetch(`http://localhost:${port}/api/folders?path=`); return x.status; } catch { return "blocked"; } }, PORT);
   expect(r).toBe("blocked");
+});
+
+// /api/patients answers only the engine's own page, so the hosted page shows the panel through the engine's frame; it never asks for the list itself.
+test("hosted: with the local engine the frame takes the drop-down's place; the page itself never asks /api/patients, and the engine refuses it to this page", async ({ page }) => {
+  const asked: string[] = [];
+  page.on("request", (r) => { if (r.url().includes("/api/patients") && r.frame() === page.mainFrame()) asked.push(r.url()); }); // the frame's own request is the engine's page's
+  await page.goto("/");
+  await page.getByRole("button", { name: "Use my local engine" }).click();
+  await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
+  await expect(inFrame(page).locator('button[aria-haspopup="dialog"]')).toHaveText(/^Choose a scan/);
+  await expect(page.locator("select")).toHaveCount(0);
+  await expect(page.locator('button[aria-haspopup="dialog"]')).toHaveCount(0); // the page's own panel is the practice server's
+  expect(asked).toEqual([]);
+  const r = await page.evaluate(async (port) => { try { return (await fetch(`http://localhost:${port}/api/patients`)).status; } catch { return "blocked"; } }, PORT);
+  expect(r).toBe("blocked"); // 403 with no CORS header: the page cannot even read the refusal
+});
+
+// The hosted frame with the real engine, on the made-up study folder in the browse root (playwright.config.ts): names and dates only in the frame.
+const MADE_UP = /Jane|Okafor|Doe\b|chest CT|LAB-000|made-up|Sep 2025|Dec 2025|Jan 2026|2025-09|2025-12/;
+type Got = { origin: string; data: Record<string, unknown> };
+const got = (page: Page) => page.evaluate(() => (window as unknown as { __got: Got[] }).__got);
+test("hosted: the Patients frame: the page cannot read it; Change folder… and Open work in it and the page gets a code only; Alt+arrows step from the page; a forged message is ignored; a follow-up's Record carries timepoint 1", async ({ page }) => {
+  test.setTimeout(300_000);
+  const ENGINE = `http://localhost:${PORT}`;
+  await page.addInitScript(() => { const w = window as unknown as { __got: unknown[] }; w.__got = []; addEventListener("message", (e) => w.__got.push({ origin: e.origin, data: e.data })); }); // every message the page gets
+  const answers: Promise<string>[] = []; // every engine answer the page itself got (the frame's own are the engine's page's)
+  page.on("response", (r) => { if (r.url().startsWith(ENGINE) && r.frame() === page.mainFrame() && (r.headers()["content-type"] ?? "").includes("json")) answers.push(r.text().catch(() => "")); });
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Use my local engine" }).click();
+    await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
+    const iframe = page.locator(FRAME), f = inFrame(page), btn = f.locator('button[aria-haspopup="dialog"]');
+    await expect(iframe).toHaveAttribute("src", `${ENGINE}/picker`);
+    await expect(iframe).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(await iframe.evaluate((e) => [e.getAttribute("name"), e.getAttribute("sandbox"), (e as HTMLIFrameElement).name])).toEqual([null, null, ""]); // no name holds anything
+    await expect(btn).toBeEnabled();
+    expect(await iframe.evaluate((e) => { const fr = e as HTMLIFrameElement; let title: string; try { title = fr.contentWindow!.document.title; } catch (x) { title = (x as Error).name; } return [fr.contentDocument, title]; }))
+      .toEqual([null, "SecurityError"]); // the page cannot read the frame
+    const closed = (await iframe.boundingBox())!;
+    expect(closed.height).toBe(34);
+    await page.screenshot({ path: "e2e/screenshots/p3/1-frame-closed.png" });
+
+    // Change folder… in the frame (its origin is the engine's own): the made-up study folder
+    await btn.click();
+    const sheet = f.getByRole("dialog", { name: "Patients" });
+    await expect.poll(async () => (await iframe.boundingBox())!.height).toBeGreaterThan(500); // size open: the page grows the frame over the viewer
+    await sheet.getByRole("button", { name: "Change folder…" }).click();
+    const browser = sheet.getByRole("region", { name: "Choose the study folder" });
+    await browser.getByRole("button", { name: "made-up", exact: true }).click();
+    await expect(browser).toContainText("Folder: /made-up");
+    await browser.getByRole("button", { name: "Choose this folder" }).click();
+    await expect(sheet).toContainText("Folder: /made-up", { timeout: 60_000 });
+    await expect(sheet.getByRole("button", { name: /^Okafor, Sam/ })).toBeVisible();
+    await sheet.getByRole("button", { name: /^Doe, Jane/ }).click();
+    await expect(sheet).toContainText("Doe, Jane2 scans, oldest first");
+    await expect(sheet.getByRole("listitem")).toHaveText([/^Baseline · 12 Sep 2025.*not measured yet/, /^Follow-up · 10 Dec 2025 · day 89.*not measured yet/]);
+
+    await sheet.getByRole("button", { name: /^Open Follow-up · 10 Dec 2025/ }).click();
+    await expect(page.getByText(/^Image \d+ \/ 269$/)).toBeVisible({ timeout: 60_000 });
+    await expect(btn).toHaveText(/^Doe, Jane · Follow-up · 10 Dec 2025 · day 89/); // the frame shows the open scan itself
+    await expect.poll(async () => (await iframe.boundingBox())!.height).toBe(34); // size closed: back in the bar, the same width
+    expect((await iframe.boundingBox())!.width).toBe(closed.width);
+    await expect(f.getByRole("button", { name: "‹ Baseline" })).toBeVisible();
+    expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe("IFRAME"); // the keys are the page's again
+    const opened = (await got(page)).filter((m) => m.data?.type === "open");
+    expect(opened).toEqual([{ origin: ENGINE, data: { type: "open", scan: expect.stringMatching(/^F-[0-9a-f]{8}$/) } }]);
+    const followUp = opened[0].data.scan as string;
+    await imageReady(page);
+    await page.screenshot({ path: "e2e/screenshots/p3/3-scan-from-frame.png" });
+
+    // Alt+← and Alt+→ with the focus on the page: the frame's list steps, never the browser's Back
+    const at = page.url();
+    await page.keyboard.press("Alt+ArrowLeft");
+    await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
+    await expect(btn).toHaveText(/^Doe, Jane · Baseline · 12 Sep 2025/);
+    await page.keyboard.press("Alt+ArrowRight");
+    await expect(page.getByText(/^Image \d+ \/ 269$/)).toBeVisible({ timeout: 60_000 });
+    expect(page.url()).toBe(at);
+
+    // a forged message from the page's own window (a name, or a code) opens nothing
+    const asked: string[] = [];
+    page.on("request", (r) => { if (/\/api\/scans\/[^/]+$/.test(new URL(r.url()).pathname)) asked.push(r.url()); });
+    await page.evaluate(() => { for (const scan of ["Doe, Jane", "RIDER-2541949645_test"]) window.postMessage({ type: "open", scan }, "*"); });
+    await page.waitForTimeout(1000);
+    expect(asked).toEqual([]);
+    await expect(btn).toHaveText(/^Doe, Jane · Follow-up/);
+
+    // Record on the follow-up: the Base44 row's timepoint is the engine's (1), not the RIDER rule's 0. The nodule: the development scan's, mapped by the engine.
+    const own = (u: string) => page.request.get(`${ENGINE}${u}`).then((r) => r.json()); // the test's own requests, not the page's
+    const jane = (await own("/api/patients")).patients.find((p: { name: string }) => p.name === "Doe, Jane");
+    expect(jane.scans.map((s: { code: string }) => s.code)[1]).toBe(followUp);
+    const m = await own(`/api/scans/${followUp}/map?from=${jane.scans[0].id}&z=161&y=321&x=330`);
+    const info = await own(`/api/scans/${followUp}`);
+    expect([info.timepoint, info.days_from_baseline]).toEqual([1, 89]);
+    await page.getByRole("slider").fill(String(info.instance_numbers[m.z]));
+    await imageReady(page);
+    const box = (await page.locator('canvas[aria-label="CT slice"]').boundingBox())!;
+    await page.mouse.click(Math.round(box.x + ((m.x + 0.5) / 512) * box.width), Math.round(box.y + ((m.y + 0.5) / 512) * box.height));
+    const panel = page.getByRole("region", { name: "Measurements" });
+    await expect(panel).toContainText(/Volume \d+\.\d\d mL/, { timeout: 60_000 });
+    // a look at the sheet, closed by Esc, leaves the keys on the page: Enter records
+    await btn.click();
+    await expect(sheet).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).not.toBe("IFRAME");
+    await page.keyboard.press("Enter");
+    await expect(panel).toContainText("Saved to the study table.");
+    const row = await page.evaluate((ref) => JSON.parse(localStorage.getItem("lung.fake.store")!).Scan.find((s: { scan_ref: string }) => s.scan_ref === ref), info.scan_ref);
+    expect([row.timepoint, row.days_from_baseline, row.study_code]).toEqual([1, 89, info.study_code]);
+
+    // the page's Record shows in the frame's chips (the page sends codes and counts only)
+    await btn.click();
+    await expect(sheet.getByRole("listitem")).toHaveText([/^Baseline · 12 Sep 2025.*not measured yet/, /^Follow-up · 10 Dec 2025 · day 89.* · open now1 nodule recorded/]);
+    await expect(sheet.getByRole("button", { name: /^Doe, Jane/ })).toHaveText(/1 nodule$/);
+    await expect(sheet.getByRole("button", { name: /^Okafor, Sam/ })).toHaveText(/not measured yet$/);
+    await expect.poll(async () => (await iframe.boundingBox())!.height).toBeGreaterThan(500); // grown over the viewer
+    await page.screenshot({ path: "e2e/screenshots/p3/2-frame-open.png" });
+    // a click beside the sheet only closes it: no first click reaches the image, and the keys are the page's again
+    const starts: string[] = [];
+    page.on("request", (r) => { if (r.url().endsWith("/nodules")) starts.push(r.url()); });
+    await page.mouse.click(1000, 650);
+    await expect(sheet).toHaveCount(0);
+    await expect.poll(async () => (await iframe.boundingBox())!.height).toBe(34);
+    await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).not.toBe("IFRAME");
+    await page.waitForTimeout(500);
+    expect(starts).toEqual([]);
+    expect((await got(page)).filter((x) => x.origin !== ENGINE && x.data?.type === "counts")).toEqual([]); // the page posts to the frame, never to itself
+    // a frame that loads again (its own reload) gets the counts with its new ready
+    await iframe.evaluate((f) => { (f as HTMLIFrameElement).src = (f as HTMLIFrameElement).src; });
+    await page.waitForTimeout(1500);
+    await btn.click();
+    await expect(sheet.getByRole("button", { name: /^Doe, Jane/ })).toHaveText(/1 nodule$/);
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+
+    // what the page holds and got: codes only
+    for (const msg of (await got(page)).filter((x) => x.origin === ENGINE)) {
+      const d = msg.data, keys = Object.keys(d).sort().join();
+      expect(d.type === "ready" ? keys === "type" : d.type === "size" ? keys === "open,type" && typeof d.open === "boolean" : d.type === "open" && keys === "scan,type" && /^F-[0-9a-f]{8}$/.test(d.scan as string)).toBe(true);
+    }
+    expect(await page.content()).not.toMatch(MADE_UP);
+    expect(await page.locator("body").innerText()).not.toMatch(MADE_UP);
+    expect((await Promise.all(answers)).join("\n")).not.toMatch(MADE_UP);
+  } finally {
+    rmSync("test-results/engine-runs/study_folder.json", { force: true }); // the next tests see no study folder, as before this one
+  }
+});
+
+test("hosted: an engine from before the frame (no picker in /api/info) gets the drop-down at once: no frame, no wait, no line", async ({ page }) => {
+  await page.route(`http://localhost:${PORT}/api/info`, async (route) => {
+    const r = await route.fetch(), { picker, ...older } = await r.json();
+    expect(picker).toBe(true);
+    await route.fulfill({ response: r, json: older });
+  });
+  const asked: string[] = [];
+  page.on("request", (r) => { if (new URL(r.url()).pathname === "/picker") asked.push(r.url()); });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Use my local engine" }).click();
+  await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Scan")).toContainText("RIDER-1286684383", { timeout: 2000 });
+  await expect(page.locator("iframe")).toHaveCount(0);
+  await expect(page.getByText(FRAME_BLOCKED)).toHaveCount(0);
+  expect(asked).toEqual([]);
+});
+
+test("hosted: a frame that never says ready: after 8 s a line that guesses no cause, and the drop-down, never a blank box", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.route(`http://localhost:${PORT}/picker`, (r) => r.abort());
+  await page.goto("/");
+  await page.getByRole("button", { name: "Use my local engine" }).click();
+  await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
+  const t0 = Date.now(), line = page.getByRole("status").filter({ hasText: FRAME_BLOCKED });
+  await expect(page.locator(FRAME)).toBeVisible(); // waiting: the frame's place, no line yet
+  await expect(line).toHaveCount(0);
+  await expect(line).toHaveText(FRAME_BLOCKED, { timeout: 15_000 });
+  expect(Date.now() - t0).toBeGreaterThan(6000);
+  await expect(page.locator(FRAME)).toBeHidden();
+  await page.getByLabel("Scan").selectOption("RIDER-1286684383_test"); // the drop-down (codes) is the fallback
+  await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
+  await imageReady(page);
+  await page.screenshot({ path: "e2e/screenshots/p3/4-frame-blocked.png" });
 });
 
 test.describe("in Safari", () => {
@@ -785,6 +1085,7 @@ test.describe("in Safari", () => {
     await page.waitForTimeout(1500);
     expect(toEngine).toEqual([]);
     await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toHaveCount(0);
+    await expect(page.locator("iframe")).toHaveCount(0); // no Patients frame in Safari, which blocks it
     await page.screenshot({ path: "e2e/screenshots/hosted-safari-engine-local.png" });
   });
 });
@@ -801,7 +1102,7 @@ test("hosted: ?engine=local connects to the local engine by itself, once, even w
   page.on("request", (r) => { if (r.url() === `http://localhost:${PORT}/api/info`) infos.push(r.url()); });
   await page.goto("/?engine=local");
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByLabel("Scan")).toContainText("RIDER-1286684383");
+  await expect(inFrame(page).locator('button[aria-haspopup="dialog"]')).toBeEnabled();
   await page.waitForTimeout(1500);
   expect(infos).toHaveLength(2); // the connect check and the viewer's device check: one connect, no repeat
   expect(seen.every((s) => s.auth === undefined)).toBe(true); // the practice server was only asked, never used
@@ -818,22 +1119,21 @@ test("coded: the hosted page shows codes only; click, Record, Find and copy_row 
   const NAME = /jane|doe_test/i; // not "doe" alone: a build hash can hold it
   const seen: Promise<string>[] = []; // every engine URL and every text answer the hosted page got, awaited before the check
   page.on("response", (r) => {
-    if (!r.url().includes(`localhost:${CODED}`)) return;
+    if (!r.url().includes(`localhost:${CODED}`) || r.frame() !== page.mainFrame()) return; // the Patients frame is the engine's own page: it shows the name
     seen.push(Promise.resolve(r.url()));
     if ((r.headers()["content-type"] ?? "").includes("json")) seen.push(r.text().catch(() => ""));
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Use my local engine" }).click();
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
-  const options = await page.getByLabel("Scan").locator("option").evaluateAll((o) => o.map((x) => (x as HTMLOptionElement).value).filter(Boolean));
+  const options = (await page.evaluate(async (u) => (await fetch(`${u}/api/scans`)).json(), `http://localhost:${CODED}`) as { id: string }[]).map((s) => s.id); // the page's own scan list
   expect(options).toHaveLength(2);
   expect(options.every((v) => /^D-[0-9a-f]{8}$/.test(v))).toBe(true);
   const info = (id: string) => page.evaluate(async ([u, i]) => (await fetch(`${u}/api/scans/${i}`)).json(), [`http://localhost:${CODED}`, id]);
   const metas = await Promise.all(options.map(info));
-  const [testId, retestId] = [options[metas.findIndex((m) => m.series === "test")], options[metas.findIndex((m) => m.series === "retest")]];
   expect(JSON.stringify(metas)).not.toMatch(NAME);
 
-  await page.getByLabel("Scan").selectOption(testId);
+  await openFromFrame(page, "Jane_Doe_Test", /^Open Baseline/);
   const counter = page.getByText(/^Image \d+ \/ 265$/);
   await expect(counter).toBeVisible({ timeout: 60_000 });
   const [z, y, x] = [161, 321, 330];
@@ -849,7 +1149,7 @@ test("coded: the hosted page shows codes only; click, Record, Find and copy_row 
   await expect(panel).toContainText("Recorded as nodule 1.");
   await expect(panel).toContainText("Saved to the study table.");
 
-  await page.getByLabel("Scan").selectOption(retestId);
+  await openFromFrame(page, "Jane_Doe_Test", /^Open Follow-up/);
   const earlier = panel.getByRole("group", { name: "Earlier nodules" });
   await expect(earlier).toContainText(/N1 · Image \d+ on test/, { timeout: 60_000 });
   const mapped = page.waitForResponse((r) => r.url().includes("/map?"), { timeout: 120_000 });
@@ -877,9 +1177,10 @@ test("coded: the hosted page shows codes only; click, Record, Find and copy_row 
   expect(await page.locator("body").innerText()).not.toMatch(NAME);
   expect((await Promise.all(seen)).join("\n")).not.toMatch(NAME);
 
-  // The engine's own page (same origin) still shows the name, in the picker.
+  // The engine's own page (same origin) still shows the name, in the Patients panel.
   await page.goto(`http://localhost:${CODED}/`);
-  await expect(page.getByLabel("Scan").locator("option", { hasText: "Jane_Doe_Test_test" })).toHaveCount(1);
+  await page.locator('button[aria-haspopup="dialog"]').click();
+  await expect(page.getByRole("dialog", { name: "Patients" }).getByRole("button", { name: /^Jane_Doe_Test/ })).toHaveCount(1);
 });
 
 // rows waiting for the study table share the live line, and the sign-out line sits left of the name, so the tool and Sign out never move.
@@ -985,14 +1286,14 @@ test.describe("in Safari on a practice server", () => {
   });
 });
 
-test("hosted (gate minors): ?engine=local leaves the address once used, so a reload does not connect again", async ({ page }) => {
+test("hosted: ?engine=local leaves the address once used, so a reload does not connect again", async ({ page }) => {
   await page.goto("/?engine=local&x=1");
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible({ timeout: 30_000 });
   expect(new URL(page.url()).searchParams.get("engine")).toBeNull();
   expect(new URL(page.url()).searchParams.get("x")).toBe("1"); // other parameters stay
 });
 
-test("practice (gate minors): while the local engine is awaited, a ready practice server stays available, and choosing it wins over the late local answer", async ({ page }) => {
+test("practice: while the local engine is awaited, a ready practice server stays available, and choosing it wins over the late local answer", async ({ page }) => {
   test.setTimeout(60_000);
   await practice(page, engine(false));
   await page.route(`http://localhost:${PORT}/api/info`, async (r) => {
@@ -1039,5 +1340,5 @@ test("practice: a check still running when the visitor presses Change never conn
   await expect(page.getByRole("status").filter({ hasText: LOCAL_LINE })).toBeVisible();
   await expect(page.getByRole("status").filter({ hasText: LIVE_LINE })).toHaveCount(0);
   expect(toPractice.slice(mark).filter((p) => p !== "/api/info")).toEqual([]); // after Change, only the practice probes: every call goes to this computer
-  await expect(page.getByLabel("Scan")).toContainText("RIDER-2541949645"); // the local engine's list (the practice stand-in lists only RIDER-1286684383)
+  await expect(inFrame(page).locator('button[aria-haspopup="dialog"]')).toBeEnabled(); // the local engine's Patients frame
 });

@@ -1,5 +1,6 @@
 Baseline: lung nodule measurement on CT, a research aid
-The code in this repository is under the MIT License (see LICENSE).
+The code in this repository is under the MIT License (see LICENSE), except the optional nodule finder in finder/,
+which is under the GNU Affero General Public License 3.0 (see finder/LICENSE and finder/NOTICE.md).
 
 Research use only. Not a medical device. Baseline does not diagnose, and its measurements are not for clinical decisions.
 
@@ -35,5 +36,28 @@ This repository contains no model weights and no scans. The parts below are used
    SIL Open Font License 1.1. The font files and the licence are in web/src/fonts/ (OFL.txt). The font is bundled
    with the page, so nothing is fetched from the internet.
 
+5. The nodule finder (optional; finder/, a separate program that the engine starts as its own process)
+   Its code is under AGPL-3.0 (finder/LICENSE). It is off unless it is turned on. Research use only.
+   - Ultralytics: GNU Affero General Public License 3.0 (AGPL-3.0). https://github.com/ultralytics/ultralytics
+     Installed by uv from finder/uv.lock as a dependency, not copied here.
+   - The model: Chou L.-F. et al. Diagnostics 2026;16(18):3038. https://doi.org/10.3390/diagnostics16183038
+     Weights: Lien-Feng/Lightweight-2-5D-LUNA16 on Hugging Face, pinned to revision d9bc7ec3f06fab778f941fd8f05de145f1a7332c.
+     Licence: Creative Commons Attribution 4.0 (CC BY 4.0). https://doi.org/10.57967/hf/10295
+     The weights and that repository's code (luna_rev/) are downloaded from their publisher at first use. They are never
+     part of this repository.
+   - Training data of the model: LUNA16 (CC BY 4.0) and LIDC-IDRI (CC BY 3.0).
+   - The finder's accuracy numbers: LIDC-annot-NLST501. Renoust B., Baudot P. et al. (2026). The Cancer Imaging Archive.
+     https://doi.org/10.7937/Y2DX-E334. Licence: CC BY 4.0.
+
+6. Data used only in results/ (never part of the tool's install or this repository's scans)
+   - QIBA VolCT 1B: the radiologists' measurements used as a second reference. McNitt-Gray M. et al. (2020).
+     The Cancer Imaging Archive. https://doi.org/10.7937/tcia.2020.1c3h-vp70
+     Licence: Creative Commons Attribution 4.0 (CC BY 4.0).
+   - National Lung Screening Trial (NLST): the images of the 10 spiculated nodules in the known limits.
+     National Lung Screening Trial Research Team. (2013). Data from the National Lung Screening Trial (NLST) [Data set].
+     The Cancer Imaging Archive. https://doi.org/10.7937/TCIA.HMQ8-J677
+     Licence: Creative Commons Attribution 4.0 (CC BY 4.0).
+   - LIDC-annot-NLST501: the readers' outlines of those nodules (see 5).
+
 Other open-source packages (FastAPI, PyTorch, SimpleITK, pydicom, React, Vite and others) are installed by the
-package managers from the lock files (engine/uv.lock, web/package-lock.json), each under its own licence.
+package managers from the lock files (engine/uv.lock, finder/uv.lock, web/package-lock.json), each under its own licence.

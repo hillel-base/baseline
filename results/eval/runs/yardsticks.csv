@@ -1,0 +1,5 @@
+yardstick,n,patients,unit,median,p90
+"R1 scan vs repeat, volume",28,,%,17.1,45.3
+"R1 scan vs repeat, long axis",28,,mm,2.7,9.2
+"R2 reader vs reader same scan, volume",540,27,%,15.0,83.5
+"R2 reader vs reader same scan, long axis",540,27,mm,2.0,13.5

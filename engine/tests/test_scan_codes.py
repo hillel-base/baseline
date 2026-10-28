@@ -42,6 +42,8 @@ def test_info_slice_click_record_and_map_work_with_codes(jane, runs_dir, log_pat
     i = c.get(f"/api/scans/{a}", headers=HOSTED)
     assert "Jane" not in i.text and i.json()["id"] == a and "study_date" not in i.json() and CODE.fullmatch(i.json()["id"])
     assert c.get(f"/api/scans/{a}/slices/4", headers=HOSTED).status_code == 200
+    s = c.post("/api/slice", json=dict(scan=a, z=4), headers=HOSTED)
+    assert s.status_code == 200 and s.content == c.get(f"/api/scans/{a}/slices/4", headers=HOSTED).content
     n = c.post(f"/api/scans/{a}/nodules", json=dict(z=4, y=32, x=32), headers=HOSTED)
     assert n.status_code == 200 and "Jane" not in n.text and n.json()["scan"] == a
     w = dict(scan=a, nodule=n.json()["nodule"])
@@ -125,6 +127,7 @@ def test_internal_name_ids_get_the_same_404_cross_origin(jane, runs_dir):
     c = make(jane, runs_dir)
     unknown = c.get("/api/scans/D-00000000", headers=HOSTED)
     for method, url, kw in [("get", "/api/scans/Jane_Doe_test", {}), ("get", "/api/scans/Jane_Doe_test/slices/4", {}),
+                            ("post", "/api/slice", dict(json=dict(scan="Jane_Doe_test", z=4))),
                             ("post", "/api/scans/Jane_Doe_test/nodules", dict(json=dict(z=4, y=32, x=32))),
                             ("post", "/api/nodule/undo", dict(json=dict(scan="Jane_Doe_test", nodule=1))),
                             ("post", "/api/events", dict(json={"action": "zoom", "scan": "Jane_Doe_test", "scale": 2})),
@@ -133,10 +136,36 @@ def test_internal_name_ids_get_the_same_404_cross_origin(jane, runs_dir):
                             ("post", "/api/nodule/paint", dict(json=dict(scan="Jane_Doe_test", nodule=1, z=4, points=[[1, 1]], radius=2, mode="paint"))),
                             ("post", "/api/nodule/axes", dict(json=dict(scan="Jane_Doe_test", nodule=1, long_line=[[1, 1], [2, 2]], short_line=[[1, 2], [2, 1]]))),
                             ("post", "/api/nodule/record", dict(json=dict(scan="Jane_Doe_test", nodule=1))),
+                            ("post", "/api/scans/Jane_Doe_test/candidates", {}), ("get", "/api/scans/Jane_Doe_test/candidates", {}),
                             ("get", "/api/scans/nope_test", {})]:
         r = getattr(c, method)(url, headers=HOSTED, **kw)
         assert r.status_code == 404 and r.json() == unknown.json() and "Jane" not in r.text
     assert c.get("/api/scans/Jane_Doe_test").status_code == 200  # own page: unchanged
+
+
+def test_finder_routes_take_codes_and_leak_no_name(jane, runs_dir, tmp_path, log_path):
+    import sys
+    from test_candidates import FakeFinder
+    c = TestClient(create_app(data_root=jane, segmenter_factory=BallSegmenter, runs_dir=runs_dir, finder=FakeFinder()), base_url="http://localhost")
+    a = codes(c)["test"]
+    r = c.post(f"/api/scans/{a}/candidates", headers=HOSTED)
+    assert r.status_code == 200 and r.json() == [{"z": 4, "y": 20, "x": 10, "score": 0.8, "image": 4}] and "Jane" not in r.text
+    g = c.get(f"/api/scans/{a}/candidates", headers=HOSTED)
+    assert g.json() == r.json() and "Jane" not in g.text
+    for un in ("D-00000000", "Jane_Doe_test"):  # a made-up code, and the internal id from another origin: the same 404 as any unknown scan
+        for method in ("post", "get"):
+            assert getattr(c, method)(f"/api/scans/{un}/candidates", headers=HOSTED).json() == {"detail": "unknown scan"}
+    assert c.get("/api/scans/Jane_Doe_test/candidates").json() == r.json()  # own page: by its own id
+    n = c.post(f"/api/scans/{a}/nodules", json=dict(z=4, y=32, x=32), headers=HOSTED).json()["nodule"]
+    rec = c.post("/api/nodule/record", json=dict(scan=a, nodule=n), headers=HOSTED)
+    assert set(rec.json()) == {"outline_file", "suggestions"} and rec.json()["suggestions"] == [] and "Jane" not in rec.text  # ranks only
+    assert "Jane_Doe_test" in log_path.read_text() and a not in log_path.read_text()  # the local log keeps the internal id
+    # a failing finder's own words can carry the folder: another origin gets none of them
+    from lung_engine.candidates import SubprocessFinder
+    (tmp_path / "bad.py").write_text("import sys\nsys.stderr.write('cannot read Jane_Doe ' + sys.argv[sys.argv.index('--image') + 1])\nsys.exit(2)")
+    c = TestClient(create_app(data_root=jane, segmenter_factory=BallSegmenter, runs_dir=runs_dir, finder=SubprocessFinder(runs_dir, [sys.executable, str(tmp_path / "bad.py")])), base_url="http://localhost")
+    for r in (c.post(f"/api/scans/{a}/candidates", headers=HOSTED), c.post("/api/scans/Jane_Doe_test/candidates")):  # no page gets the finder's own words
+        assert r.status_code == 500 and r.json() == {"detail": "The finder did not run. The engine's log has the details."}
 
 
 def test_public_rider_ids_still_work_cross_origin(dicom_series, runs_dir):
@@ -146,7 +175,7 @@ def test_public_rider_ids_still_work_cross_origin(dicom_series, runs_dir):
 
 
 def routes(a, b):
-    return [("get", f"/api/scans/{a}", {}), ("get", f"/api/scans/{a}/slices/4", {}),
+    return [("get", f"/api/scans/{a}", {}), ("get", f"/api/scans/{a}/slices/4", {}), ("post", "/api/slice", dict(json=dict(scan=a, z=4))),
             ("post", f"/api/scans/{a}/nodules", dict(json=dict(z=4, y=32, x=32))),
             ("get", f"/api/scans/{b}/map?from={a}&z=4&y=32&x=32", {}),
             ("post", "/api/events", dict(json={"action": "zoom", "scan": a, "scale": 2}))]

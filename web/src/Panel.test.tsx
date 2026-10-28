@@ -239,3 +239,8 @@ test("Earlier nodules: one line per earlier row with Find; Measure here (M) only
   expect(ui({ open: true })).not.toContain("visibility:hidden");
   expect(text(renderToString(<Earlier rows={[{ ...row(1, 7), slice_label: "slice index" }]} busy={false} open={false} onFind={() => {}} onMeasure={() => {}} />))).toContain("N1 · Slice index 7 on test");
 });
+
+test("the Shortcuts list names Alt+← and Alt+→ (the Patients panel), only where the Patients button shows", () => {
+  expect(text(renderToString(<App />))).toContain("Alt+← Alt+→The patient's previous or next scan (beside the Patients button)");
+  expect(text(renderToString(<App embedded panel={false} />))).not.toContain("previous or next scan"); // the hosted page with the local engine: the drop-down, no steps
+});

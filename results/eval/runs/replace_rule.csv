@@ -1,0 +1,4 @@
+k,floor_mm,scans,q3_scans_with_any_pair_outside,random_outside_median_pct,random_outside_max_pct,random_scans_over_1pct
+0.5,10.0,38,2,29.04,54.66,38
+0.75,10.0,38,0,3.76,17.01,36
+1.0,10.0,38,0,0.0,2.52,3

@@ -159,3 +159,50 @@ test("a slice request the page aborted is not a stopped practice server: the abo
   await expect(getSlice("s", 0)).rejects.toThrow(PRACTICE_STOPPED); // a real loss still says stopped
   expect(heard).toEqual([PRACTICE_STOPPED]);
 });
+test("slice route: with the token (a practice server) a slice is one POST /api/slice; without it (the local engine, from either page) the same GET as before", async () => {
+  const f = stub({});
+  const c = new AbortController();
+  const call = (i: number) => f.mock.calls[i] as unknown as [string, RequestInit | undefined];
+  await getSlice("s", 3, c.signal); // the engine-served page
+  setApiBase("http://localhost:8000"); // the hosted page with the local engine: no token
+  await getSlice("s", 4);
+  setApiBase("https://p.example", true);
+  setAuth("tok"); // a practice server
+  await getSlice("s", 5, c.signal);
+  expect(call(0)).toEqual(["/api/scans/s/slices/3", { signal: c.signal }]);
+  expect(call(1)).toEqual(["http://localhost:8000/api/scans/s/slices/4", { signal: undefined }]);
+  expect(call(2)).toEqual(["https://p.example/api/slice",
+    { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer tok" }, body: JSON.stringify({ scan: "s", z: 5 }), signal: c.signal }]);
+});
+test("404 fallback: a practice engine with no POST /api/slice (an older one) gets the same slice again by GET, then GET for good on that base; nothing says stopped", async () => {
+  const heard: (string | undefined)[] = [];
+  onBlocked((t) => heard.push(t));
+  const f = vi.fn(async (url: string, _init?: RequestInit) => url.endsWith("/api/slice")
+    ? { ok: false, status: 404, url, json: async () => ({ detail: "Not Found" }), arrayBuffer: async () => new ArrayBuffer(0), clone() { return this; } }
+    : { ok: true, status: 200, url, json: async () => ({}), arrayBuffer: async () => new Int16Array([7, 8]).buffer, clone() { return this; } });
+  vi.stubGlobal("fetch", f);
+  const seen = () => f.mock.calls.map(([u, i]) => [u, i?.method ?? "GET", (i?.headers as Record<string, string>)?.authorization, i?.signal]);
+  setApiBase("https://old.example", true);
+  setAuth("tok");
+  const c = new AbortController();
+  expect(await getSlice("s", 5, c.signal)).toEqual(new Int16Array([7, 8])); // the slice arrives, by GET
+  expect(seen()).toEqual([["https://old.example/api/slice", "POST", "Bearer tok", c.signal], ["https://old.example/api/scans/s/slices/5", "GET", "Bearer tok", c.signal]]);
+  await getSlice("s", 6);
+  expect(seen()[2]).toEqual(["https://old.example/api/scans/s/slices/6", "GET", "Bearer tok", undefined]); // no POST first any more
+  expect(f).toHaveBeenCalledTimes(3);
+  setApiBase("https://other.example", true); // another practice server starts on POST again
+  await getSlice("s", 7);
+  expect(seen()[3].slice(0, 2)).toEqual(["https://other.example/api/slice", "POST"]);
+  expect(heard.filter(Boolean)).toEqual([]); // no error and no "stopped" on the status line
+});
+
+test("404 fallback: a genuine 404 from a NEW engine (an unknown scan) shows its error and keeps POST for that base", async () => {
+  const f = vi.fn(async (url: string, _init?: RequestInit) => ({ ok: false, status: 404, url, json: async () => ({ detail: "unknown scan" }), arrayBuffer: async () => new ArrayBuffer(0), clone() { return this; } }));
+  vi.stubGlobal("fetch", f);
+  setApiBase("https://new.example", true);
+  setAuth("tok");
+  await expect(getSlice("D-00000000", 5)).rejects.toThrow();
+  expect(f).toHaveBeenCalledTimes(1); // no GET retry: the route exists, the scan does not
+  await getSlice("D-00000000", 6).catch(() => {});
+  expect((f.mock.calls[1] as unknown as [string, RequestInit])[1].method).toBe("POST"); // still POST on that base
+});

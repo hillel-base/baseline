@@ -1,0 +1,18 @@
+[project]
+name = "lung-finder"
+version = "0.1.0"
+description = "Optional nodule finder for the lung tumour tool (research use only). A separate program under AGPL-3.0."
+requires-python = ">=3.11,<3.12"
+license = { text = "AGPL-3.0-only" }
+dependencies = [
+  "ultralytics==8.4.175",
+  "huggingface_hub==2.2.0",
+  "pandas==3.0.6",
+  "scikit-learn==1.9.1",
+  "tqdm==4.70.1",
+  "opencv-python-headless==4.14.0.94",
+  "SimpleITK==2.5.6",
+]
+
+[tool.uv]
+package = false

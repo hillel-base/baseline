@@ -112,22 +112,35 @@ def load_folder_scan(scan_id: str, d: Path, uid_hash: str) -> Scan:
     raise FileNotFoundError(scan_id)
 
 
-def baseline_days(root: Path, patient: str, date: str | None) -> int:
-    """Whole days from the patient's earliest test/retest study date to `date`. Reads the headers in each series folder, never pixels. 0 when a date is missing."""
-    if date is None:
-        return 0
-    dates = []
-    for d in (root / patient / "ct_test", root / patient / "ct_retest"):
-        if not d.is_dir():
+def study_date(d: Path) -> str | None:
+    """StudyDate of a series folder as YYYY-MM-DD, from the first file whose header reads (no pixels). None when there is no file, no tag or a bad date."""
+    try:
+        files = sorted(f for f in d.iterdir() if not f.name.startswith("."))  # one file, not GDCM's scan of the whole folder (about 0.5 s a series)
+    except OSError:
+        return None
+    for f in files:
+        r = sitk.ImageFileReader()
+        r.SetImageIO("GDCMImageIO")  # DICOM only: a PNG would read, without a StudyDate
+        r.SetFileName(str(f))
+        try:
+            r.ReadImageInformation()
+        except RuntimeError:  # not DICOM: try the next file
             continue
         try:
-            r = sitk.ImageFileReader()
-            r.SetFileName(sitk.ImageSeriesReader.GetGDCMSeriesFileNames(str(d))[0])
-            r.ReadImageInformation()
-            dates.append(_date(r.GetMetaData("0008|0020")))
-        except (RuntimeError, ValueError, IndexError):  # no file, no tag or a bad date
-            return 0
-    return (datetime.strptime(date, "%Y-%m-%d") - datetime.strptime(min(dates), "%Y-%m-%d")).days if dates else 0
+            return _date(r.GetMetaData("0008|0020"))
+        except (RuntimeError, ValueError):
+            return None
+    return None
+
+
+def baseline_days(root: Path, patient: str, date: str | None) -> int:
+    """Whole days from the patient's earliest test/retest study date to `date`. Reads one header in each series folder, never pixels. 0 when a date is missing."""
+    if date is None:
+        return 0
+    dates = [study_date(d) for d in (root / patient / "ct_test", root / patient / "ct_retest") if d.is_dir()]
+    if not dates or None in dates:
+        return 0
+    return (datetime.strptime(date, "%Y-%m-%d") - datetime.strptime(min(dates), "%Y-%m-%d")).days
 
 
 def _date(v: str) -> str:

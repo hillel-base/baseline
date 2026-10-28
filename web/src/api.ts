@@ -8,6 +8,7 @@ export type ScanMeta = ScanRow & {
   instance_numbers: number[] | null; // DICOM image number per z, null if the series has none
   series_number: number | null; study_date?: string | null; /* absent when the page is not the engine's own */ slice_thickness_mm: number | null; // DICOM header; null if missing
   head_dir: 1 | -1 | null; // +1 if head lies toward higher z, null if unknown
+  timepoint?: number | null; // a study-folder scan's order among its patient's study days (Baseline 0); null or absent: the RIDER test/retest rule
 };
 
 let base = ""; // "" = the engine serves this page; the hosted page sets http://localhost:8000 after "Use my local engine", or a practice server
@@ -43,7 +44,7 @@ async function send(url: string, init?: RequestInit) {
 }
 /** The engine's /api/info (5 s by default), with the token while one is set: a practice server sends its model only to a signed-in caller.
  * Does not change the base: the caller does that on success. */
-export const probeEngine = async (at: string, ms = 5000): Promise<{ commit: string; model: string }> =>
+export const probeEngine = async (at: string, ms = 5000): Promise<{ commit: string; model: string; picker?: boolean }> => // picker: the engine serves /picker
   (await ok(await fetch(`${at}/api/info`, { headers: auth ? { authorization: `Bearer ${auth}` } : undefined, signal: AbortSignal.timeout(ms) }))).json();
 
 /** The engine's /api/info at the current base; `device` is the torch device type ("cuda", "mps" or "cpu", "unknown" for a fake model). */
@@ -56,8 +57,20 @@ async function ok(r: Response) {
 
 export const listScans = async (): Promise<ScanRow[]> => (await ok(await send("/api/scans"))).json();
 export const getScan = async (id: string): Promise<ScanMeta> => (await ok(await send(`/api/scans/${id}`))).json();
-export const getSlice = async (id: string, z: number, signal?: AbortSignal): Promise<Int16Array> =>
-  new Int16Array(await (await ok(await send(`/api/scans/${id}/slices/${z}`, { signal }))).arrayBuffer());
+const getOnly = new Set<string>(); // practice servers whose engine answered POST /api/slice with 404: they get the GET for the rest of the session
+/** One slice. With the token (a practice server) it is POST /api/slice, one URL for every slice: the token makes each request need a CORS
+ *  preflight, which the browser keeps per URL, so one URL pays it once per 10 minutes instead of once per slice.
+ *  The local engine never gets the token and keeps the plain GET, which needs no preflight. */
+export const getSlice = async (id: string, z: number, signal?: AbortSignal): Promise<Int16Array> => {
+  const at = base, byGet = () => send(`/api/scans/${id}/slices/${z}`, { signal });
+  let r: Response;
+  if (auth && !getOnly.has(at)) {
+    r = await send("/api/slice", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scan: id, z }), signal });
+    const missingRoute = r.status === 404 && (await r.clone().json().catch(() => null))?.detail === "Not Found"; // the router's own 404, not "unknown scan"
+    if (missingRoute) { getOnly.add(at); r = await byGet(); } // an older practice engine has no route: GET from now on, this slice once more
+  } else r = await byGet();
+  return new Int16Array(await (await ok(r)).arrayBuffer());
+};
 
 export const ENGINE_STOPPED = "The engine stopped. Restart it (see README) and click again.";
 export const NO_LONGER_OPEN = "This nodule is no longer open in the engine (another tab or a restart). Click the nodule to start again."; // the engine's own text
@@ -106,12 +119,12 @@ export const paintStroke = (o: Pick<Outline, "scan" | "nodule">, s: Stroke) => p
 /** Hand-set axes on axis_z, end points [[y, x], [y, x]] (decimals allowed). Sent only after a real drag: the engine marks the axes hand-set even when unchanged. */
 export const setAxes = (o: Pick<Outline, "scan" | "nodule">, long_line: [Pt, Pt], short_line: [Pt, Pt]) => post("/api/nodule/axes", { scan: o.scan, nodule: o.nodule, long_line, short_line });
 export type Link = { follows: string; map_distance_mm: number }; // the earlier nodule a follow-up nodule was matched to, and the proposal to the first click
-/** Saves the nodule as the engine holds it; resolves to the outline file (relative to the runs folder). */
-export const recordNodule = async (o: Pick<Outline, "scan" | "nodule">, link?: Link) =>
-  (await post<{ outline_file: string }>("/api/nodule/record", { scan: o.scan, nodule: o.nodule, ...link })).outline_file;
+/** Saves the nodule as the engine holds it: the outline file (relative to the runs folder) and, after a finder run on the scan, the ranks of the suggestions inside the outline. */
+export const recordNodule = (o: Pick<Outline, "scan" | "nodule">, link?: Link) =>
+  post<{ outline_file: string; suggestions?: number[] }>("/api/nodule/record", { scan: o.scan, nodule: o.nodule, ...link });
 /** Reports a UI-only action for the run log. Fire and forget: a logging failure never blocks the user. */
-export const postEvent = (e: { action: "copy_row" | "export_csv" | "screenshot" | "discard" | "delete_row" | "clear_table" | "restore_table" | "start_over" | "zoom" | "zoom_fit" | "zoom_area" | "undo_delete_row" | "followup_confirm" | "followup_moved" | "undo_record" | "save_failed";
-  scale?: number; scan?: string; nodule?: number; rows?: number; file?: string; follows?: string; distance_mm?: number; undoes?: string; reason?: string }) => {
+export const postEvent = (e: { action: "copy_row" | "export_csv" | "screenshot" | "discard" | "delete_row" | "clear_table" | "restore_table" | "start_over" | "zoom" | "zoom_fit" | "zoom_area" | "undo_delete_row" | "followup_confirm" | "followup_moved" | "undo_record" | "save_failed" | "candidate_accept" | "candidate_reject" | "undo_candidate_reject";
+  scale?: number; scan?: string; nodule?: number; rows?: number; file?: string; follows?: string; distance_mm?: number; undoes?: string; reason?: string; rank?: number; score?: number }) => {
   if (e.action === "save_failed" && !base) return; // only the hosted page saves, and before "Use my local engine" "" is the hosted origin, which keeps no log: dropped
   send("/api/events", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(e) }).catch(() => {});
 };
@@ -120,5 +133,21 @@ export type FolderSeries = { uid_hash: string; description: string; images: numb
 export type Folder = { path: string; parent: string | null; folders: string[]; series: FolderSeries[] };
 /** The engine's folder list: `path` is relative to its browse root (or absolute inside it). Rejects with the engine's own text. */
 export const listFolder = (path: string) => call<Folder>(`/api/folders?path=${encodeURIComponent(path)}`);
-export const openFolder = (path: string, series: string) =>
-  post<ScanMeta>("/api/folders/open", { path, series });
+
+// GET /api/patients: the engine's own page gets names; a practice server gets "Practice patient N" and no folder.
+export type PatientScan = { id: string; code?: string /* the id as the hosted page sees it (none from an older engine) */; timepoint: "Baseline" | "Follow-up" | "Undated"; date: string | null; day: number | null; label: string; slice_mm: number | null; images: number };
+export type Patient = { key: string; name: string; source: "study" | "data"; scans: PatientScan[] };
+export type Patients = { folder: { path: string | null; from: "panel" | "LUNG_STUDY_DIR" | null; error: string | null }; patients: Patient[] };
+/** Rejects when the route fails or is missing (an older practice server): the page then keeps the drop-down. */
+export const listPatients = async (): Promise<Patients> => {
+  const j = await (await ok(await send("/api/patients", { signal: AbortSignal.timeout(60_000) }))).json(); // a hung index gives the drop-down back (20,000 headers take about 7 s)
+  if (!Array.isArray(j?.patients)) throw new Error("No patient list.");
+  return j;
+};
+/** Sets the study folder (relative to the browse root); the engine reads it first and answers as GET does, or with its own plain text. */
+export const setStudyFolder = (path: string) => post<Patients>("/api/patients/folder", { path });
+export type Candidate = { z: number; y: number; x: number; score: number; image: number };
+/** Is the optional co-pilot there? Any failure (an older engine too) counts as no. */
+export const getCopilot = (): Promise<boolean> => call<{ enabled?: boolean }>("/api/copilot").then((j) => j.enabled === true, () => false);
+/** Runs the finder on the scan; rejects with the engine's own text. */
+export const findCandidates = (id: string) => post<Candidate[]>(`/api/scans/${id}/candidates`);

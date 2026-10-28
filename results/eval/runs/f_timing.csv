@@ -1,0 +1,5 @@
+scan,status,follows,seconds,find_seconds,model_seconds
+RIDER-2541949645_retest,try,outlines/RIDER-2541949645_test_n1_accepted.nii.gz,31.2,7.4,1.97
+RIDER-1286684383_retest,accepted,outlines/RIDER-1286684383_test_n2_accepted.nii.gz,14.5,9.2,1.93
+RIDER-2619750334_retest,accepted,outlines/RIDER-2619750334_test_n1_accepted.nii.gz,19.8,8.8,2.0
+RIDER-2541949645_retest,accepted,outlines/RIDER-2541949645_test_n1_accepted.nii.gz,4.5,0.0,2.07
