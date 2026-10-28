@@ -13,7 +13,7 @@ from .scans import Scan
 HALF_MM = (60, 90, 90)  # working-box half extents (z, y, x): the largest RIDER tumour is ~66 mm across
 WINDOW = 160  # the model's input window (voxels per side); nni.py sets the same size on nnInteractive
 AIR_HU = -950  # our assumption, not yet confirmed: at or below is air (the usual emphysema cut-off); ground glass is ~-600
-SNAP_HU = -500  # proposed, not yet confirmed: Snap to tissue paints only voxels above this (so it leaves ground glass out too)
+SNAP_HU = -750  # Snap to tissue paints voxels at this level and above, so the hazy ground glass stays in: the lab's convention (2026-10-28) at the published lower bound for ground glass (about -750 to -300 HU; normal lung about -825 to -860)
 
 
 class OutsideBox(Exception):
@@ -189,7 +189,7 @@ class OutlineSession:
             if not fp.any():
                 raise OutsideBox
             if snap and not erase:
-                fp &= self.scan.array[z + self.lo[0], self.lo[1]:self.hi[1], self.lo[2]:self.hi[2]] > SNAP_HU
+                fp &= self.scan.array[z + self.lo[0], self.lo[1]:self.hi[1], self.lo[2]:self.hi[2]] >= SNAP_HU
             changed = int((fp & self.mask[z]).sum() if erase else (fp & ~self.mask[z]).sum())
             if not changed:  # refused before any state changes: no history, no painted count, hand-set axes kept
                 raise NoChange(snap and not erase)

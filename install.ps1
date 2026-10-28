@@ -1,6 +1,6 @@
 # Baseline installer for Windows (PowerShell 5 or newer). Research use only, not a medical device.
 #   irm https://raw.githubusercontent.com/hillel-base/baseline/main/install.ps1 | iex
-# Gets the code, runs lung.ps1 setup (uv and Python 3.11, the local page, the packages, the model weights, three practice patients),
+# Gets the code, runs lung.ps1 setup (uv and Python 3.11, the local page, the packages, the model weights, 8 practice patients),
 # starts the engine on http://localhost:8000 and opens the hosted page, which uses that engine. Safe to run again: it updates the code and
 # starts the engine; steps already done are skipped.
 #   BASELINE_DIR      the folder (default: %USERPROFILE%\Baseline)
@@ -40,7 +40,7 @@
         if (-not $cloned) { Write-Host "git is missing or the clone failed, so the code is downloaded as an archive instead."; Get-Code }
     }
 
-    Say "Installing what is missing, then starting the engine (lung.ps1 setup). The first run downloads about 2 GB; later runs download nothing."
+    Say "Installing what is missing, then starting the engine (lung.ps1 setup). The first run downloads about 3 GB; later runs download nothing."
     if ($env:BASELINE_NO_OPEN -eq "1") { $env:LUNG_NO_OPEN = "1" }
     # Bypass for this one script only: PowerShell's default policy refuses to run a .ps1 file.
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dir "lung.ps1") setup

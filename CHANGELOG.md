@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.2 (2026-10-28)
+
+The nodule finder on by default, eight practice patients, a cleaner wait and folder choice, and Snap to tissue keeps ground glass. Research use only.
+
+**Measure**
+- Paint's Snap to tissue now keeps −750 HU and above (it was above −500 HU), so the hazy ground-glass part of a nodule stays in while air stays out. This follows the lab's convention of including ground glass in the nodule volume; −750 HU is the published lower bound for ground glass. It applies only to a Paint stroke with Snap on, which is off by default, on both pages. Clicks, Erase, Axes and the model are unchanged.
+- While a scan opens, the image area shows a plain square with a slow scan line and the time to expect. Under reduced motion it stands still.
+- Change folder… in the Patients panel is a folder view in the sheet's own style:
+  - a title and one line on what to pick;
+  - the path as a breadcrumb, and folder rows;
+  - Type a path behind a link;
+  - the engine's refusals in amber;
+  - one Use this folder button beside Cancel. It is off at the top folder, which the engine refuses.
+- The Study table loads its rows in the background when the page signs in, so the tab usually opens with them. Until they come, it shows its own layout with placeholder rows.
+- Earlier nodules is a heading that names the Baseline. Each row is one line.
+
+**Install and start**
+- The nodule finder is on by default on macOS and Linux. Setup turns it on only after it loads; if it cannot, setup says why and the tool starts without it. Windows keeps it off, as before.
+- A local install gets 8 practice patients, not 3. `./lung.sh fetch --all` (Windows: `.\lung.ps1 fetch --all`) gets all 28. The 25 beyond the 3 development patients are CT only.
+- A first install takes about 7 minutes on a Mac with Apple silicon and uses about 4.8 GB of disk (our test).
+
+**Practice servers**
+- In server mode the engine reads a scan's files in parallel before it decodes them, and with `LUNG_WARMUP=1` it reads every practice scan once at start (the tutorial case first), pausing while a visitor loads. A local install is unchanged.
+
+**Results**
+- The results now say which expert reference matches the lab's outline style (spikes and hazy ground glass included): the outlines steered toward the RIDER expert (R1) are the closer guide, and the radiologists' outlines stay reported. "18 of 18" is the 9-in-10 range; within the expert's usual change it is 15 of 18. No number changed.
+
 ## 0.1.1 (2026-10-27)
 
 The Patients panel, an optional nodule finder, and faster scrolling on the practice server. Research use only.

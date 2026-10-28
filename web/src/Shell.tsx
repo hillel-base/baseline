@@ -6,7 +6,7 @@ import { App, Logo } from "./App";
 import { IN_USE, PRACTICE_STOPPED, SIGN_IN_FIRST, onBlocked, postEvent, probeEngine, releaseSession, setApiBase, setAuth, type Patients } from "./api";
 import { accessToken, configError, currentUser, entities, signIn, signOut } from "./base44";
 import { PROBE_MS, askInOrder, probe, servers, waking, type PracticeState } from "./practice";
-import { StudyView } from "./StudyView";
+import { StudyView, forgetStudy, preloadStudy } from "./StudyView";
 import { WAITING_LOCAL } from "./texts";
 import { RETRY_MS, WAITING, outbox, signOutLine, toEntities, type Payload } from "./study";
 import { keepInMemory } from "./record";
@@ -173,10 +173,10 @@ export function Measure({ uid, onDemo, onInstall, cross, onScan }: { uid: string
           onRecorded={(row, scan, report) => {
             const e = toEntities(row, scan, engine);
             newest = row.outline_file; setNewestWaits(false);
-            sent.set(row.outline_file, { key: box.add(e, (s) => { report(s); if (newest === row.outline_file) setNewestWaits(s.state === "waiting"); }, scan.spacing), e });
+            sent.set(row.outline_file, { key: box.add(e, (s) => { report(s); if (newest === row.outline_file) setNewestWaits(s.state === "waiting"); if (s.state === "saved") preloadStudy(box.waiting); }, scan.spacing), e });
           }}
           knownNodules={(s) => box.highest(s.scan_ref)}
-          onUndoRecord={(row) => { const s = sent.get(row.outline_file); if (newest === row.outline_file) setNewestWaits(false); return s && box.undo(s.key, s.e); }}
+          onUndoRecord={(row) => { const s = sent.get(row.outline_file); if (newest === row.outline_file) setNewestWaits(false); forgetStudy(); return s && box.undo(s.key, s.e).finally(() => preloadStudy(box.waiting)); }}
           overlay={gone || busy ? <>
             <p role="alert">{gone ? PRACTICE_STOPPED : BUSY}</p>
             <div className="m-empty-actions">
@@ -275,6 +275,7 @@ export function Shell() {
   const about = useRef<HTMLDialogElement>(null);
   const [left, setLeft] = useState(0); // this person's rows still waiting: they are sent only when this person signs in again here
   useEffect(() => { showLeft = setLeft; resolveSession(currentUser, signIn, guardStore(), configError).then(setSession, () => setSession({ kind: "error", message: NO_BASE44 })); }, []);
+  useEffect(() => { if (session?.kind === "user") preloadStudy(box.waiting); }, [session?.kind]); // (b) the Study table's rows load with the signed-in page, not on the tab's press
   if (session?.kind === "error") return <Refused message={session.message} />;
   if (session?.kind !== "user") return null; // loading, or on its way to Base44's sign-in
   const user = session.user;

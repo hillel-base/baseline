@@ -34,16 +34,16 @@ The command:
 1. Gets the code into `~/Baseline` (`%USERPROFILE%\Baseline` on Windows), with git if you have it, or as a download.
 2. Installs uv and Python 3.11 if they are missing.
 3. Gets the page for your own computer: it builds it with Node 22.12 or newer, or downloads it from this version's release.
-4. Installs the engine's packages.
+4. Installs the engine's packages, and on macOS and Linux the [nodule finder](#nodule-finder-optional)'s packages.
 5. Downloads the model weights (392 MB) from their publisher.
-6. Downloads three public practice patients (about 0.9 GB) from NCI Imaging Data Commons.
+6. Downloads 8 public practice patients (about 2.1 GB) from NCI Imaging Data Commons. For all 28, see [More practice patients](#more-practice-patients).
 7. Starts the engine on `http://localhost:8000`.
 8. Opens the page:
    - **Mac with Chrome:** the Baseline page, in Chrome. It connects to the engine on your computer by itself.
    - **Mac without Chrome:** the page on your own computer, `http://localhost:8000`, in your default browser. Safari can use it (see [Safari](#troubleshooting)).
    - **Linux and Windows:** the Baseline page, in your default browser. It connects to the engine on your computer by itself.
 
-On a Mac with Apple silicon (M4 Pro), the first run took about 5 minutes from the command to a running engine (4 min 31 s, 5 min 14 s and 4 min 39 s in three clean installs). It downloaded about 1.8 GB and used about 3 GB of disk. Run the same command again to update the code and start the tool: steps already done are skipped, and the engine was running again in about 10 s. Stop the engine with Ctrl+C, or close the window.
+On a Mac with Apple silicon (M4 Pro), the first run took about 7 minutes from the command to a running engine (6 min 44 s in a clean install; the nodule finder took 18 s of it and the 8 practice patients about 4 minutes; the finder's load check, added after that install, adds about 27 s). It downloaded about 3.5 GB and used about 4.8 GB of disk. Run the same command again to update the code and start the tool: steps already done are skipped, and the engine was running again in about 10 s. Stop the engine with Ctrl+C, or close the window.
 
 Then:
 1. **Sign in** (the Baseline page only). It is invite-only. Without an invitation, open `http://localhost:8000` instead: the page on your own computer needs no sign-in.
@@ -54,10 +54,20 @@ Then:
 
 Each control shows its keyboard key. Press **?** to list them all. While the page says "Loading image …", wait: a click counts once that image shows.
 
+### More practice patients
+
+The first run gets 8 of the 28 public practice patients: the 3 development patients, with their expert outlines (RIDER-LungCT-Seg), and 5 more (CT only), so that the 8 hold small, medium and large tumours. For all 28, the same patients as on the practice server, run this in the Baseline folder, then start the tool again:
+
+```bash
+./lung.sh fetch --all      # Windows: .\lung.ps1 fetch --all
+```
+
+It downloads the other 20 patients (CT only, about 5.1 GB; about 10 minutes on our Mac). Patients already there are skipped.
+
 ## No install: the practice server
 
 If you have an invitation to the Baseline page, choose **Practice server** in Measure. The engine then runs on our server, which has a graphics card, so you install nothing.
-- **Scans:** the three public practice patients only.
+- **Scans:** the 28 public practice patients only.
 - **One person at a time:** others see a short wait message.
 - **Sometimes paused:** the page then says so and names the next step: the Demo (recorded results that need no engine) to try the tool, or your own computer for your own scans.
 - **Sleeping:** a server that has not been used for a while sleeps. The page shows it as starting, and it is ready in about 1 minute.
@@ -72,7 +82,7 @@ If you have an invitation to the Baseline page, choose **Practice server** in Me
 | Standard PC without a graphics card (Intel or AMD) | about 20 s (32 s on a 2-core cloud machine) | 16 GB recommended (one click peaks at about 6–7 GB) | |
 | Practice server | about 0.4 s (an NVIDIA T4); the first click after the server starts takes about 4 s | nothing on your computer | practically the same outlines as on a Mac (overlap 0.997 or more on 113 outlines) |
 
-- **Disk:** about 6 GB free on macOS and Windows, about 12 GB on Linux. On Linux the default PyTorch build includes the NVIDIA libraries, even without a graphics card (about 3 GB more to download).
+- **Disk:** about 8 GB free on macOS, 7 GB on Windows, about 14 GB on Linux; about 5 GB more for all 28 practice patients. On Linux the default PyTorch build includes the NVIDIA libraries, even without a graphics card (about 3 GB more to download).
 - **Browser:** Chrome or Firefox for the Baseline page. Chrome asks you once whether the page may connect to apps on your device: choose **Allow**. Any browser, Safari too, for the page on your own computer (`http://localhost:8000`). Safari cannot use the Baseline page with your own engine, see [Troubleshooting](#troubleshooting).
 - **Internet:** needed for the first run.
 - **Not supported:** a Mac with Apple silicon whose graphics chip PyTorch cannot use is refused.
@@ -103,15 +113,16 @@ flowchart LR
 
 - **The scans never leave your computer.** The engine reads them locally, and the page shows them straight from the engine.
 - **The hosted page saves numbers and short labels only.** For example: long axis, short axis, volume, number of clicks, and a random code for each scan. Base44 never receives images, names, study dates, DICOM UIDs or folder paths.
-- **Patient names and dates stay on your computer.** The page on your computer (`http://localhost:8000`) shows them. On the hosted page they show only inside the Patients panel, which the engine on your computer draws in a frame (Chrome and Firefox). The hosted page cannot read that frame and gets a random code for each scan instead; only the three public practice patients keep their public names.
+- **Patient names and dates stay on your computer.** The page on your computer (`http://localhost:8000`) shows them. On the hosted page they show only inside the Patients panel, which the engine on your computer draws in a frame (Chrome and Firefox). The hosted page cannot read that frame and gets a random code for each scan instead; only the 28 public practice patients keep their public names.
 - **The engine answers only the Baseline page's own address.** A page on another site cannot use it. Folders can be chosen only in the Patients panel that the engine draws.
 
 ## Nodule finder (optional)
 
 Research use only. Its marks are suggestions to check, not findings: read the whole scan as usual.
 
-- **What it is:** a separate program in `finder/` (Chou et al. 2.5D YOLO11n, on the CPU). The engine starts it for each request and reads its answer; the engine never loads its code. It is off unless you turn it on.
-- **Turn it on** (macOS and Linux; not tested on Windows): in the Baseline folder, run `uv sync --directory finder` (it needs internet, and installs the finder's own packages, PyTorch included, into `finder/.venv`; setup puts uv in `~/.local/bin`). Then start the engine with `LUNG_FINDER=subprocess ./lung.sh start`. The weights (5.5 MB) download into `~/.lung-finder/` the first time you press **Find nodules**. Without `LUNG_FINDER`, or with `LUNG_COPILOT=off`, the page shows no finder.
+- **What it is:** a separate program in `finder/` (Chou et al. 2.5D YOLO11n, on the CPU). The engine starts it for each request and reads its answer; the engine never loads its code.
+- **On by default on macOS and Linux:** setup installs the finder's own packages, PyTorch included, into `finder/.venv` (`uv sync --directory finder`; on our Mac 18 s and about 0.2 GB to download, because it shares PyTorch with the engine). Then it checks that they load (about 27 s the first time, then about 1 s). `./lung.sh start` turns the finder on only after that check has passed. If the install or the check fails, setup says so, once more after "Tool is running", and goes on: the tool works without the finder, and the next `./lung.sh setup` tries again. The usual causes are no internet or a full disk, and on Linux a missing system library such as libxcb or libGL (on Debian and Ubuntu: `sudo apt install libxcb1 libx11-6 libxext6 libsm6 libice6 libgl1 libglib2.0-0`). The weights (5.5 MB) download into `~/.lung-finder/` the first time you press **Find nodules**. To turn it off: `LUNG_COPILOT=off ./lung.sh start` (or `LUNG_FINDER= ./lung.sh start`); the page then shows no finder.
+- **Windows:** off. The engine stops a finder run with process calls that only macOS and Linux have, and setup says so once.
 - **What it shows:** a **Find nodules** button over the image. After about 10 s, a list of suggestions, numbered like the dashed rings on the image and the ticks on the slice bar. For each one: **Go to it**, **Measure** (starts an outline there, as a first click would) and **Not a nodule**. Measure is off while an outline that is not recorded yet is open, so it never drops one.
 - **How accurate:** it found about 7 in 10 of the nodules that at least 3 of 4 radiologists marked on 50 public screening CTs, with about 2 extra marks per scan. It can miss large tumours: on public lung-cancer scans it found 10 of 15 tumours of 40 mm and over.
 - **Licence:** the finder is under **AGPL-3.0**, because it uses Ultralytics. The rest of Baseline is MIT and calls it as a separate process. `finder/LICENSE` has the full text and `finder/NOTICE.md` the credits. If you run it on a server for other people, show them a visible link to the exact source it runs.
@@ -138,7 +149,7 @@ How much hands-on time the tool saves, and how close its outlines come to the ex
 - **Safari:** the Base44 page cannot reach the engine on your computer (Safari blocks it). In Safari the page says so, and "Your own computer" cannot be chosen there. Use Chrome or Firefox, open http://localhost:8000, or use the practice server.
 - **"You are signed in, but this app is invite-only. Ask the app's admin for an invite."** You need an invitation for the hosted page. Open `http://localhost:8000` instead: it needs no sign-in.
 - **"Could not download the local page."** Setup says so and goes on: the hosted page still works. Run the command again later, or install Node 22.12 or newer, which builds the page instead.
-- **The first run is slow.** It downloads about 1.8 GB on a Mac: about 0.4 GB of Python packages, 0.4 GB of model weights and 0.9 GB of practice scans. Linux downloads about 3 GB more for PyTorch. Later starts download nothing.
+- **The first run is slow.** It downloads about 3.5 GB on a Mac: about 0.4 GB of Python packages, 0.2 GB for the nodule finder, 0.4 GB of model weights and 2.1 GB of practice scans. Linux downloads about 3 GB more for PyTorch. Later starts download nothing.
 - **"The engine stopped."** The engine stops itself when it would use too much memory (the log says `watchdog: memory … exiting`). Close other programs and run the command again. On an 8 GB PC you can raise the limit with `LUNG_MEM_LIMIT_GB=7`, at your own risk.
 - **Port 8000 is in use.** The hosted page looks for the engine on port 8000 only. Stop the other program, or use the page on your own computer with `LUNG_PORT` set to another port.
 - **Windows warns about a script.** Windows SmartScreen should not appear: the command runs in PowerShell and opens no downloaded file from Explorer. The install runs on GitHub's Windows machines on every change (the windows-setup check above); a person has not yet run it on a Windows PC. If you run a downloaded `install.ps1` or `Start lung tool.bat` instead and "Windows protected your PC" appears, choose More info, then Run anyway.
@@ -161,7 +172,8 @@ git clone https://github.com/hillel-base/baseline && cd baseline
 | `LUNG_DATA_DIR` | the folder of practice scans | `data/rider` |
 | `LUNG_BROWSE_ROOT` | the only folder tree "Change folder…" can browse | your home folder |
 | `LUNG_STUDY_DIR` | the study folder the Patients panel lists, instead of "Change folder…" | |
-| `LUNG_FINDER` | `subprocess`: use the nodule finder in `finder/` (see [Nodule finder](#nodule-finder-optional)) | off |
+| `LUNG_FINDER` | `subprocess`: use the nodule finder in `finder/` (see [Nodule finder](#nodule-finder-optional)) | `subprocess` on macOS and Linux once setup has installed and checked the finder; off on Windows |
+| `LUNG_COPILOT` | `off`: no nodule finder, and the page shows none of it | on |
 | `LUNG_NO_OPEN` | `1`: do not open the browser | |
 | `LUNG_PAGE_URL` | the page to open | per system, see [Quick start](#quick-start) |
 | `BASELINE_PAGE_URL` | where setup downloads the built page when Node is missing | this version's release |

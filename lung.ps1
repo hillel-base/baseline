@@ -1,6 +1,7 @@
-# Lung tumour measurement tool (research use only): .\lung.ps1 setup | start   (Windows PowerShell 5+)
+# Lung tumour measurement tool (research use only): .\lung.ps1 setup | start | fetch --all   (Windows PowerShell 5+)
 # setup installs what is missing, then starts. Each phase is skipped when already done. Log: runs\setup-<UTC>.jsonl
-param([Parameter(Position = 0)][string]$Command = "")
+# fetch --all adds the other 20 practice patients (28 in all).
+param([Parameter(Position = 0)][string]$Command = "", [Parameter(Position = 1)][string]$Option = "")
 $ErrorActionPreference = "Stop"
 
 $Root = $PSScriptRoot
@@ -132,8 +133,14 @@ function Start-Tool {
 switch ($Command) {
     "setup" {
         New-Item -ItemType Directory -Force $Runs | Out-Null; [IO.File]::WriteAllText($Log, "", $Utf8)
-        Log-Machine; Phase-Prerequisites; Phase-PythonEngine; Phase-ModelWeights; Phase-Scans; Start-Tool
+        Log-Machine; Phase-Prerequisites; Phase-PythonEngine; Phase-ModelWeights; Phase-Scans
+        Write-Host "The nodule finder is off on Windows: it uses process calls that only macOS and Linux have. Everything else works."
+        Start-Tool
     }
     "start" { Start-Tool }
-    default { Write-Host "Usage: .\lung.ps1 setup | start"; exit 2 }
+    "fetch" {
+        $all = @(); if ($Option -eq "--all") { $all = @("--all") } elseif ($Option) { Write-Host "Usage: .\lung.ps1 fetch [--all]"; exit 2 }
+        Run uv run --directory (Join-Path $Root "engine") python -m lung_engine.fetch --data $env:LUNG_DATA_DIR @all
+    }
+    default { Write-Host "Usage: .\lung.ps1 setup | start | fetch --all"; exit 2 }
 }

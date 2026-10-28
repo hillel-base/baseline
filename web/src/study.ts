@@ -22,6 +22,11 @@ export type MeasurementFields = {
 type M = MeasurementFields & { id: string };
 const PRACTICE = /^RIDER-\d{10}$/; // the public practice data keeps its own name as its study code (the engine's PUBLIC_PATIENT)
 
+/** A timepoint's name, as the Study table heads its columns: 0 is the Baseline, 1 the Follow-up, then Follow-up 2, 3… */
+export const tpName = (t: number) => (t === 0 ? "Baseline" : t === 1 ? "Follow-up" : `Follow-up ${t}`);
+/** The RIDER rule: the test series is timepoint 0, the retest 1. */
+export const riderTimepoint = (series: string) => (series === "retest" ? 1 : 0);
+
 /** The Base44 payload of a recorded row. approved_at is the row's own Record time. A study-folder scan's timepoint is the engine's (the order of its study day);
  *  otherwise RIDER test is timepoint 0, retest is 1 (the series name is the label). */
 export function toEntities(row: RecordedNodule, scan: ScanMeta, info: { commit: string; model: string }):
@@ -30,7 +35,7 @@ export function toEntities(row: RecordedNodule, scan: ScanMeta, info: { commit: 
   const z = inst ? inst.indexOf(row.click_image!) : row.click_image! - 1;
   return {
     scan: {
-      study_code: scan.study_code, timepoint: scan.timepoint ?? (scan.series === "retest" ? 1 : 0), days_from_baseline: scan.days_from_baseline, scan_ref: scan.scan_ref, status: "in progress", series_number: scan.series_number,
+      study_code: scan.study_code, timepoint: scan.timepoint ?? riderTimepoint(scan.series), days_from_baseline: scan.days_from_baseline, scan_ref: scan.scan_ref, status: "in progress", series_number: scan.series_number,
       series_label: scan.slice_thickness_mm === null ? "" : `${scan.slice_thickness_mm} mm`, slice_thickness_mm: scan.slice_thickness_mm, slice_spacing_mm: scan.spacing[2],
     },
     measurement: {

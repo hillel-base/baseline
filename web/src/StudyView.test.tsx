@@ -1,7 +1,10 @@
 import { renderToString } from "react-dom/server";
 import { expect, test, vi } from "vitest";
 import { OUT_OF_DATE_NOTE, type MeasurementFields, type ScanFields } from "./study";
-import { RemoveMenu, StudyTable, historyRows, recordLines, removeLine, type Data } from "./StudyView";
+import { RemoveMenu, StudyTable, StudyView, forgetStudy, historyRows, preloadStudy, recordLines, removeLine, type Data } from "./StudyView";
+
+const lists = vi.hoisted(() => { const l = { scans: [] as unknown[], ms: [] as unknown[], answer: (k: "scans" | "ms"): Promise<unknown> => Promise.resolve(l[k]) }; return l; });
+vi.mock("./base44", async (real) => ({ ...(await real<object>()), entities: { Scan: { list: () => lists.answer("scans") }, NoduleMeasurement: { list: () => lists.answer("ms") } } })); // the two lists the Study table reads; nothing reaches Base44
 
 type S = ScanFields & { id: string };
 type M = MeasurementFields & { id: string };
@@ -162,4 +165,57 @@ test("no rows at all: the empty state, with Go to Measure, and no controls", () 
   expect(text(h)).not.toContain("Download CSV");
   expect(h).not.toContain("<table");
   expect(text(h)).toContain("Every Record saved on Base44. Numbers only: names and dates stay on your computer.");
+});
+
+const view = (waiting: Data["waiting"] = []) => renderToString(<StudyView onRemove={async () => ({ saved: true, outOfDate: false })} waiting={() => waiting} pending={() => 0} onGoToMeasure={() => {}} />);
+test("(b) before the lists come: the table's own title row, tools (off) and column header, three placeholder rows, and Loading the study table… for a screen reader", () => {
+  const h = view();
+  expect(h).toContain('<p class="sr-only" role="status">Loading the study table…</p>');
+  expect(h).toContain("<h2>Study table</h2>");
+  expect(text(h)).toContain("Every Record saved on Base44. Numbers only: names and dates stay on your computer.");
+  const skel = h.match(/<table class="st-table st-skel" aria-hidden="true">.*?<\/table>/)![0];
+  expect(rows(skel).slice(0, 2)).toEqual([["Patient", "Nodule", "Baseline", "Follow-up", "Actions"], ["Long mm", "Short mm", "Volume mL", "Method", "Long mm", "Short mm", "Volume mL", "Method"]]); // as the loaded table heads them
+  expect(rows(skel).slice(2)).toHaveLength(3);
+  expect(h.match(/<button[^>]*disabled=""[^>]*>(Record|History|Download CSV)<\/button>|role="switch"[^>]*disabled=""/g)).toHaveLength(4); // there, so nothing moves, but off
+  expect(text(h)).not.toContain("No measurements yet");
+});
+test("(b) preloadStudy: the lists the signed-in page loaded are the tab's first rows, with this browser's Records still waiting (the e2e checks that the tab loads them again)", async () => {
+  lists.scans = [sc("b0", "P-3K9Q", 0)]; lists.ms = [m("1", "b0", "N1")];
+  preloadStudy(() => []);
+  await new Promise((ok) => setTimeout(ok, 0));
+  const waits = [{ key: "k", scan: { study_code: "P-7XM2", timepoint: 0 } as ScanFields, measurement: m("x", "", "N2") }]; // recorded after the preload
+  const h = view(waits);
+  expect(h).not.toContain("Loading the study table…");
+  expect(rows(h).slice(2).map((r) => r.slice(0, 2))).toEqual([["P-3K9Q", "N1"], ["P-7XM2", "N2"]]);
+  expect(rows(h)[3]).toContain("Not saved yet");
+  preloadStudy(() => []); // after a save: the old copy is not shown while the new one loads
+  expect(view()).toContain("Loading the study table…");
+});
+
+test("(b) forgetStudy, at the moment of an Undo: the early copy is dropped at once, so an undone Record never shows while the next load is on its way", async () => {
+  lists.scans = [sc("b0", "P-3K9Q", 0)]; lists.ms = [m("1", "b0", "N1")];
+  preloadStudy(() => []);
+  await new Promise((ok) => setTimeout(ok, 0));
+  expect(text(view())).toContain("N1");
+  forgetStudy();
+  expect(view()).toContain("Loading the study table…");
+});
+
+test("(b) an answer asked before the last preloadStudy never becomes the tab's first copy: a Record, then Undo at once, in either order of the answers", async () => {
+  const tick = () => new Promise((ok) => setTimeout(ok, 0));
+  const before = lists.answer;
+  try {
+    for (const olderLast of [true, false]) {
+      const held: ((v: unknown) => void)[] = [];
+      lists.answer = () => new Promise((ok) => held.push(ok));
+      preloadStudy(() => []); // the Record's save is reported: R1 stands in this answer
+      preloadStudy(() => []); // Undo at once: R1 is taken back in this one
+      const [olderScans, olderMs, newerScans, newerMs] = held;
+      const older = async () => { olderScans([sc("b0", "P-3K9Q", 0)]); olderMs([m("1", "b0", "N1")]); await tick(); };
+      const newer = async () => { newerScans([sc("b0", "P-3K9Q", 0)]); newerMs([]); await tick(); };
+      if (olderLast) { await newer(); await older(); } else { await older(); expect(view()).toContain("Loading the study table…"); await newer(); } // never the undone Record
+      expect(text(view())).toContain("No measurements yet");
+      expect(text(view())).not.toContain("N1");
+    }
+  } finally { lists.answer = before; }
 });

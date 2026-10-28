@@ -26,8 +26,9 @@ from . import signin
 from .candidates import CUT, FinderError, FinderMissing, NoFinder, SubprocessFinder, to_voxels
 from .followup import map_index, register
 from .events import REPO, EventLog
+from .fetch import ALL as PUBLIC
 from .outline import SNAP_HU, AlreadyRecorded, Empty, NoChange, NoNodule, Recorded, NothingToUndo, OnAir, OutlineSession, OutsideBox, write_mask
-from .scans import FOLDER_ID, Scan, baseline_days, folder_series, head_dir, list_scans, load_folder_scan, load_scan, study_date, valid_scan_id
+from .scans import FOLDER_ID, Scan, baseline_days, folder_series, head_dir, list_scans, load_folder_scan, load_scan, prefetch, study_date, valid_scan_id, warm_order
 from .study_index import TooManyFiles, display_name, index_folder, label, timeline
 
 
@@ -116,13 +117,14 @@ MODEL = "nnInteractive 2.6.0 (CC BY-NC-SA 4.0)"
 MAP_FAILED = "Could not align this scan to the earlier one."
 STROKE_OUTSIDE = "That stroke is outside the working box of this nodule."
 NO_CHANGE = "That stroke changed nothing."
-SNAP_KEPT_OUT = f" Snap to tissue keeps out pixels at or below \u2212{-SNAP_HU} HU."
+SNAP_KEPT_OUT = f" Snap to tissue keeps out pixels below \u2212{-SNAP_HU} HU."
 AXES_OUTSIDE = "Those axis end points are outside the working box of this nodule."
 FOLDERS_LOCAL_ONLY = "Folders open only on the page the engine serves on this computer."
 GONE = "This nodule is no longer open in the engine (another tab or a restart). Click the nodule to start again."
 SIGN_IN = "Sign in to use the practice server."
 FINDER_FAILED = "The finder did not run. The engine's log has the details."
-PRACTICE = "RIDER-2541949645,RIDER-1286684383,RIDER-2619750334"  # the 3 development patients
+TUTORIAL = "RIDER-2619750334"  # the tutorial's practice case (web/src/tutorial.ts CASE): a practice server warms it first
+PRACTICE = ",".join(PUBLIC)  # the 28 public RIDER practice patients; a server sets LUNG_PRACTICE_PATIENTS
 BY_ENV = "The study folder is set by LUNG_STUDY_DIR on this computer."
 STUDY_GONE = "The study folder cannot be found. Choose it again with Change folder…"
 STUDY_UNREADABLE = "The study folder cannot be read. Choose it again with Change folder…"
@@ -171,6 +173,7 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
         study_scans = {}
     cache: OrderedDict[str, Scan] = OrderedDict()  # last 2 scans stay in memory
     lock = threading.Lock()  # FastAPI runs sync routes in a threadpool
+    visitor = threading.Event()  # set while a visitor's own scan loads on a practice server: the warm-up waits meanwhile
     if segmenter_factory is None:
         from .nni import NNISegmenter  # imports torch; the tests pass a fake instead
         segmenter_factory = NNISegmenter
@@ -357,11 +360,17 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
                             raise FileNotFoundError(scan_id)
                         cache[scan_id] = load_folder_scan(scan_id, d, folder_scans[scan_id][1])
                     else:
+                        if server:  # the mounted bucket answers many files at once far faster than one by one (prefetch)
+                            visitor.set()
+                            p, _, sr = scan_id.rpartition("_")
+                            prefetch(data_root / p / f"ct_{sr}")
                         cache[scan_id] = load_scan(data_root, scan_id)
                 except FileNotFoundError:
                     raise HTTPException(404, "unknown scan")
                 except RuntimeError:  # SimpleITK's error text can hold the file path: send none
                     raise HTTPException(400, UNREADABLE)
+                finally:
+                    visitor.clear()
                 while len(cache) > 2:
                     cache.popitem(last=False)
             cache.move_to_end(scan_id)
@@ -798,4 +807,23 @@ def create_app(data_root: Path | None = None, segmenter_factory: Callable | None
                 "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
     if dist.exists() and not server:  # the server has no page: the hosted page is the page
         app.mount("/", StaticFiles(directory=dist, html=True))
+    if server and os.environ.get("LUNG_WARMUP") == "1":  # space/start.sh: read every practice scan's files once, so a first open is fast
+        def wait_for_visitor():
+            while visitor.is_set():
+                time.sleep(0.2)
+
+        def warm():
+            t0, order, n = time.perf_counter(), warm_order(practice, TUTORIAL), 0
+            for sid in order:
+                p, _, sr = sid.rpartition("_")
+                n += prefetch(data_root / p / f"ct_{sr}", workers=4, pause=wait_for_visitor)
+                if sid == f"{TUTORIAL}_test":
+                    try:
+                        get_scan(sid)  # the tutorial's Baseline is decoded into the cache too: its first open is instant
+                    except HTTPException:
+                        pass
+                    print(f"warm-up: the tutorial case is ready after {time.perf_counter() - t0:.0f} s", flush=True)
+            print(f"warm-up: {len(order)} scans, {n} files read in {time.perf_counter() - t0:.0f} s", flush=True)
+
+        threading.Thread(target=warm, daemon=True, name="warm-up").start()
     return app

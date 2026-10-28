@@ -113,12 +113,12 @@ def test_valid_token_reaches_practice_scans_only(srv, dicom_series):
     assert s.status_code == 200 and s.content == srv.get(SCAN + "/slices/4", headers=A).content
 
 
-def test_practice_patients_default_to_the_three_development_patients(server_env, clock, dicom_series, runs_dir, monkeypatch):
+def test_practice_patients_default_to_the_28_public_patients(server_env, clock, dicom_series, runs_dir, monkeypatch):
     monkeypatch.delenv("LUNG_PRACTICE_PATIENTS")
-    for p in ("RIDER-2541949645", "RIDER-1286684383", "RIDER-2619750334", "RIDER-9999999999"):
+    for p in ("RIDER-2541949645", "RIDER-1286684383", "RIDER-2619750334", "RIDER-1867199702", "RIDER-1129164940", "RIDER-1234567890"):
         shutil.copytree(dicom_series / "RIDER-TEST01", dicom_series / p)
     c = make(dicom_series, runs_dir)
-    assert {s["patient"] for s in c.get("/api/scans", headers=A).json()} == {"RIDER-2541949645", "RIDER-1286684383", "RIDER-2619750334"}
+    assert {s["patient"] for s in c.get("/api/scans", headers=A).json()} == {"RIDER-2541949645", "RIDER-1286684383", "RIDER-2619750334", "RIDER-1867199702", "RIDER-1129164940"}
     assert c.get(SCAN, headers=A).status_code == 404
 
 

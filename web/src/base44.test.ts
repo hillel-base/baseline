@@ -28,6 +28,15 @@ test("the fake entities create, filter and list under lung.fake.store only, and 
   store.set("lung.fake.saveFail", "1");
   await expect(fake.entities.NoduleMeasurement.create({})).rejects.toThrow("Fake save failure");
 });
+test("lung.fake.listDelay slows the two list calls by that many ms (the rows as they were when asked), and notes when each was asked", async () => {
+  await fake.entities.Scan.create({ scan_ref: "x" });
+  store.set("lung.fake.listDelay", "50");
+  const t0 = Date.now(), asked = fake.entities.Scan.list();
+  await fake.entities.Scan.create({ scan_ref: "y" }); // saved after the ask
+  expect(await asked).toHaveLength(1);
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(45);
+  expect((globalThis as any).window.__fakeLists).toHaveLength(1); // the e2e times the Study table's loads by these
+});
 test("the fake client hands out a fixed fake token", () => {
   expect(fake.accessToken()).toBe("fake-base44-token");
 });

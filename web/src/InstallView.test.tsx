@@ -14,17 +14,17 @@ test("the install view shows one command per system from TOOL_REPO_RAW, what hap
   const html = renderToString(<InstallView onBack={() => {}} />), t = text(html);
   for (const line of [
     "Run it on your computer",
-    "The tool can run on your own computer, with the same three public practice scans. Research use only.",
+    "The tool can run on your own computer, with 8 of the 28 public practice patients. To add the other 20, run ./lung.sh fetch --all in its folder (Windows: .\\lung.ps1 fetch --all). Research use only.",
     "It also opens CT folders on your computer, with Change folder… in the Patients panel: on the tool's own page, and on this page in Chrome or Firefox.",
     "On a Mac or Linux, open Terminal and run:", MAC,
     "On Windows, open PowerShell and run:", WIN,
-    "The first start installs the tool's packages and downloads the model weights and the three practice patients: about 1.8 GB on a Mac (about 3 GB more on Linux). It took about 5 minutes on a Mac with Apple silicon (our tests). Later starts are quick.",
+    "The first start installs the tool's packages and, on a Mac or Linux, the nodule finder, and downloads the model weights and the 8 practice patients: about 3.5 GB on a Mac (about 3 GB more on Linux). It took about 7 minutes on a Mac with Apple silicon (our test). Later starts are quick.",
     "The command then opens this page, which connects to the engine on your computer by itself, and your Records are saved to the Study table. If it does not connect, choose Your own computer, or Use my local engine. Chrome asks once whether this site may use apps on your device; allow it.",
     "On a Mac without Chrome, the command opens the tool's own page instead (http://localhost:8000), which works in Safari. That page works without Base44 and saves nothing to it.",
     "What you need",
     "An Apple-chip Mac with 16 GB of memory or more, or a PC with an NVIDIA graphics card, or an ordinary Intel or AMD PC without one.",
     "On a standard computer without a graphics card, a click takes about 20 s (our test).",
-    "About 6 GB of free disk (12 GB on Linux), and internet for the first start.",
+    "About 8 GB of free disk (14 GB on Linux), and internet for the first start.",
     "Research use only. Not a medical device.",
     "Back to Measure",
   ]) expect(t).toContain(line);

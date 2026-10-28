@@ -221,9 +221,12 @@ const row = (nodule: number, slice: number) => ({ nodule, slice, slice_label: "i
 test("Earlier nodules: one line per earlier row with Find; Measure here (M) only beside the proposed one", () => {
   const ui = (more: Partial<Parameters<typeof Earlier>[0]> = {}) =>
     renderToString(<Earlier rows={[row(1, 112), row(2, 90)]} busy={false} open={false} onFind={() => {}} onMeasure={() => {}} {...more} />);
-  expect(text(ui())).toContain("Earlier nodules");
-  expect(text(ui())).toContain("N1 · Image 112 on test");
-  expect(text(ui())).toContain("N2 · Image 90 on test");
+  expect(text(ui())).toContain("Earlier nodulesfrom the Baseline"); // the page's own word for the scan (study.ts), never "test"
+  expect(ui()).toMatch(/<h3 class="m-sub">Earlier nodules<\/h3>/); // a heading, as strong as the page's other section headings
+  expect(text(ui())).toContain("N1 · Image 112Find");
+  expect(text(ui())).toContain("N2 · Image 90Find");
+  expect(text(ui())).not.toMatch(/\btest\b/);
+  expect(ui()).toContain('<span class="m-earlier-t">N1 · Image 112</span>'); // one line: it cuts with an ellipsis, never wraps (measure.css)
   expect(button(ui(), "Find N1")).not.toContain("disabled");
   expect(ui()).not.toContain("Measure here");
   const html = ui({ proposed: "f2" });
@@ -237,7 +240,7 @@ test("Earlier nodules: one line per earlier row with Find; Measure here (M) only
   expect(text(ui({ open: true }))).toContain("Record this nodule or start a new one to find another.");
   expect(ui()).toContain('style="visibility:hidden">Record this nodule'); // hidden, its room kept, so the card under the list never moves
   expect(ui({ open: true })).not.toContain("visibility:hidden");
-  expect(text(renderToString(<Earlier rows={[{ ...row(1, 7), slice_label: "slice index" }]} busy={false} open={false} onFind={() => {}} onMeasure={() => {}} />))).toContain("N1 · Slice index 7 on test");
+  expect(text(renderToString(<Earlier rows={[{ ...row(1, 7), slice_label: "slice index" }]} busy={false} open={false} onFind={() => {}} onMeasure={() => {}} />))).toContain("N1 · Slice index 7");
 });
 
 test("the Shortcuts list names Alt+← and Alt+→ (the Patients panel), only where the Patients button shows", () => {

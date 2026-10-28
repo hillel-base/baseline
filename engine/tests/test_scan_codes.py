@@ -254,11 +254,12 @@ def test_a_new_code_is_never_one_already_used(jane, runs_dir, monkeypatch):
 def test_only_listed_patients_pass_uncoded(dicom_series, runs_dir):
     (dicom_series / "RIDER-TEST01").rename(dicom_series / "RIDER-1234567890")
     shutil.copytree(dicom_series / "RIDER-1234567890", dicom_series / "RIDER-1286684383")
+    shutil.copytree(dicom_series / "RIDER-1234567890", dicom_series / "RIDER-1867199702")  # a CT-only practice patient (fetch.PRACTICE)
     c = make(dicom_series, runs_dir)
     rows = {r["series"] + r["patient"]: r for r in c.get("/api/scans", headers=HOSTED).json()}
     assert any(r["id"] == "RIDER-1286684383_test" for r in rows.values()) and not any("1234567890" in r["id"] + r["patient"] for r in rows.values())
-    listed = c.get("/api/scans/RIDER-1286684383_test", headers=HOSTED).json()
-    assert listed["study_code"] == "RIDER-1286684383"
+    for p in ("RIDER-1286684383", "RIDER-1867199702"):  # its own name is its study code, so the hosted page saves a practice row
+        assert c.get(f"/api/scans/{p}_test", headers=HOSTED).json()["study_code"] == p
     code = next(r["id"] for r in rows.values() if r["id"].startswith("D-"))
     i = c.get(f"/api/scans/{code}", headers=HOSTED)
     assert "1234567890" not in i.text and i.json()["study_code"] != "RIDER-1234567890"

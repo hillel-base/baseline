@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Lung tumour measurement tool (research use only): ./lung.sh setup | start
-# setup installs what is missing, then starts. Each phase is skipped when already done. Log: runs/setup-<UTC>.jsonl
+# Lung tumour measurement tool (research use only): ./lung.sh setup | start | fetch --all
+# setup installs what is missing, then starts. fetch --all adds the other 20 practice patients (28 in all). Each phase is skipped when already done. Log: runs/setup-<UTC>.jsonl
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -83,6 +83,26 @@ phase_python_engine() {
   log_phase python_engine $skipped $(( $(bytes "$ROOT/engine/.venv") - v0 )) "$t0" "$s0"
 }
 
+# The nodule finder (AGPL-3.0, finder/), on by default: its own packages in finder/.venv. start turns it on only when the marker
+# says they installed and load here; without it the tool works, with no finder.
+FINDER_OK="$ROOT/finder/.venv/lung-finder-ok"
+FINDER_NOTE=""  # setup's line when the finder is off, repeated after "Tool is running" so it does not scroll away
+phase_finder() {
+  local t0 s0 skipped=true v0; t0=$(date +%s); s0=$(iso)
+  [ -f "$FINDER_OK" ] || skipped=false
+  v0=$(bytes "$ROOT/finder/.venv")
+  rm -f "$FINDER_OK"
+  if ! uv sync --directory "$ROOT/finder"; then
+    FINDER_NOTE="The nodule finder is off: it could not be installed (no internet, or a full disk?). The tool works without it. Run ./lung.sh setup again later to add it."
+  elif ! YOLO_OFFLINE=1 "$ROOT/finder/.venv/bin/python" -c "import cv2, ultralytics"; then  # as space/start.sh: a missing system library shows here
+    FINDER_NOTE="The nodule finder is off: its packages installed but do not load (the error is above). On Linux this is usually a missing system library such as libxcb or libGL (Debian and Ubuntu: sudo apt install libxcb1 libx11-6 libxext6 libsm6 libice6 libgl1 libglib2.0-0). The tool works without it. See \"Nodule finder\" in README.md, then run ./lung.sh setup again."
+  else
+    : > "$FINDER_OK"
+  fi
+  if [ -n "$FINDER_NOTE" ]; then echo "$FINDER_NOTE"; fi
+  log_phase finder $skipped $(( $(bytes "$ROOT/finder/.venv") - v0 )) "$t0" "$s0"
+}
+
 phase_model_weights() {
   local t0 s0 skipped=true b0; t0=$(date +%s); s0=$(iso)
   b0=$(bytes "$WEIGHTS")
@@ -149,8 +169,10 @@ open_page() {
 start() {
   mkdir -p "$RUNS"; [ -f "$LOG" ] || : > "$LOG"
   ENGINE_PID=""
+  if [ -f "$FINDER_OK" ]; then export LUNG_FINDER="${LUNG_FINDER-subprocess}"; fi  # the nodule finder, once setup checked it; LUNG_FINDER= keeps it off
   start_engine
   echo "Tool is running at http://localhost:$PORT"
+  if [ -n "$FINDER_NOTE" ]; then echo "$FINDER_NOTE"; fi
   open_page
   echo "Setup log: $LOG"
   if [ -n "$ENGINE_PID" ]; then echo "The engine runs until you press Ctrl+C or close this window."; wait "$ENGINE_PID"; fi
@@ -159,8 +181,9 @@ start() {
 case "${1:-}" in
   setup)
     mkdir -p "$RUNS"; : > "$LOG"; log_machine
-    phase_prerequisites; phase_python_engine; phase_model_weights; phase_scans
+    phase_prerequisites; phase_python_engine; phase_finder; phase_model_weights; phase_scans
     start ;;
   start) start ;;
-  *) echo "Usage: ./lung.sh setup | start" >&2; exit 2 ;;
+  fetch) shift; uv run --directory "$ROOT/engine" python -m lung_engine.fetch --data "$LUNG_DATA_DIR" "$@" ;;
+  *) echo "Usage: ./lung.sh setup | start | fetch --all" >&2; exit 2 ;;
 esac

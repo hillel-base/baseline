@@ -166,11 +166,12 @@ def test_stroke_paints_and_erases_exactly_the_disk_inside_the_box(monkeypatch):
         s.stroke([(60, 100, 100), (61, 100, 100)], 3, erase=False, snap=False)  # a stroke stays on one slice
 
 
-def test_snap_paints_only_voxels_above_minus_500_hu():
+def test_snap_paints_voxels_at_minus_750_hu_and_above():
+    # The lab's measurement convention (its answer, 2026-10-28): the nodule volume includes the hazy ground-glass part, so Snap keeps -750 HU (the published lower bound for ground glass) and above.
     scan = big_scan()
     scan.array[:, :, 110:] = -1000
-    scan.array[:, :, 112] = -500  # -500 itself is not above
-    scan.array[:, :, 113] = -499
+    scan.array[:, :, 112] = -751  # just below: kept out
+    scan.array[:, :, 113] = -750  # the level itself: painted
     s = OutlineSession(BallSegmenter())
     s.start(scan, (60, 100, 100))
     before = full(s)

@@ -1,6 +1,8 @@
 import hashlib
 import math
+import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +54,36 @@ def head_dir(scan: Scan):
     """1 when a higher z is nearer the head, -1 when nearer the feet, None for a tilted series."""
     zz = scan.image.GetDirection()[8]
     return None if abs(zz) < 0.9 else (1 if zz > 0 else -1)
+
+
+def prefetch(d: Path, workers: int = 16, pause=None) -> int:
+    """Reads every .dcm file in folder d once, in parallel, so the series listing and the pixel read that follow come from the cache.
+    A practice server's scans sit in a mounted bucket that answers each file slowly but many at once: a cold open took 30-35 s there,
+    against 1.3 s to decode the same 281 files from a local disk (2026-10-28). `pause` is called before each file (the warm-up waits
+    there while a visitor loads a scan). Returns the number of files read; a missing folder reads nothing, and a file that cannot be
+    read is skipped (the normal read that follows reports it, as the plain "unreadable" line, and the warm-up goes on)."""
+    try:
+        files = [e.path for e in os.scandir(d) if e.is_file() and e.name.endswith(".dcm")]
+    except OSError:
+        return 0
+    def one(f):
+        if pause:
+            pause()
+        try:
+            with open(f, "rb") as fh:
+                while fh.read(1 << 20):
+                    pass
+            return 1
+        except OSError:
+            return 0
+    with ThreadPoolExecutor(workers) as ex:
+        return sum(ex.map(one, files))
+
+
+def warm_order(practice: set[str], first: str) -> list[str]:
+    """The practice scans a server warms at start: the tutorial case first (its Baseline, then its Follow-up), then the rest sorted."""
+    order = ([first] if first in practice else []) + sorted(practice - {first})
+    return [f"{p}_{s}" for p in order for s in ("test", "retest")]
 
 
 def load_scan(root: Path, scan_id: str) -> Scan:

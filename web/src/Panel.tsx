@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import type { Outline } from "./api";
 import { BRUSH_MAX, BRUSH_MIN, isEmpty, type Mode } from "./clicks";
 import type { RecordedNodule } from "./record";
-import { NOT_SAVED, SAVED, SAVING, type SaveState } from "./study";
+import { NOT_SAVED, SAVED, SAVING, riderTimepoint, tpName, type SaveState } from "./study";
 import { workingText } from "./ui";
 
 type Props = { outline?: Outline; pending: boolean | "outline" | "edit" | "record" | "find"; error?: string; instanceNumbers: number[] | null; mode?: Mode; onMode?: (m: Mode) => void; onUndo?: () => void; onStartOver?: () => void; onGoToAxisSlice: () => void; onNew: () => void;
@@ -31,10 +31,11 @@ export function Earlier({ rows, proposed, busy, open, onFind, onMeasure }: { row
   onFind: (r: RecordedNodule) => void; onMeasure: () => void }) { // proposed: that row's outline_file; open: an unrecorded outline is on the page
   return (
     <div className="m-tools-panel" role="group" aria-label="Earlier nodules">
-      <div className="small muted">Earlier nodules</div>
+      {/* the rows are all of one scan (followup.ts), so the heading names it once and each row stays one line */}
+      <div className="m-earlier-head"><h3 className="m-sub">Earlier nodules</h3>{rows[0] && <span className="small muted">{`from the ${tpName(riderTimepoint(rows[0].series))}`}</span>}</div>
       {rows.map((r) => (
         <div className="m-earlier" key={r.outline_file}>
-          <span>{`N${r.nodule} · ${r.slice_label === "image" ? "Image" : "Slice index"} ${r.slice} on ${r.series}`}</span>
+          <span className="m-earlier-t">{`N${r.nodule} · ${r.slice_label === "image" ? "Image" : "Slice index"} ${r.slice}`}</span>
           <span className="m-row">
             {proposed === r.outline_file && <button className="m-btn sm" aria-label="Measure here (M)" data-key="m" disabled={busy || open} onClick={onMeasure}>Measure here<Kbd k="M" on={!busy && !open} /></button>}
             <button className="m-btn sm" aria-label={`Find N${r.nodule}`} disabled={busy || open} onClick={() => onFind(r)}>Find</button>

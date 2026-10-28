@@ -30,6 +30,18 @@ body:has(.m-app) { margin: 0; background: var(--bg-app); }
 .m-viewer { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg-viewer); }
 .m-empty { flex: 1; display: grid; place-content: center; gap: var(--space-2); padding: var(--space-6); text-align: center; color: var(--text-muted); }
 .m-empty [role="alert"] { color: var(--warn); }
+/* The wait while a scan opens: a blank image square with a slow scan line, the title shimmering. Our own CSS. */
+.m-wait { position: relative; justify-self: center; width: min(52vh, 440px); aspect-ratio: 1; margin-bottom: var(--space-3); overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--radius-key); background: var(--bg-app); }
+.m-wait::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 28%; border-bottom: 1px solid rgba(126, 144, 245, 0.8);
+  background: linear-gradient(to bottom, transparent, rgba(59, 81, 229, 0.22)); animation: m-sweep 2.8s ease-in-out infinite; }
+@keyframes m-sweep { from { transform: translateY(-100%); } to { transform: translateY(357%); } } /* 28% tall: 357% of itself is the square's foot */
+.m-wait-title { margin: 0; font-size: var(--fs-counter); line-height: var(--lh-counter); font-weight: var(--fw-medium); color: transparent;
+  background: linear-gradient(90deg, var(--text-muted) 40%, var(--text) 50%, var(--text-muted) 60%) 0 0 / 300% 100%; -webkit-background-clip: text; background-clip: text;
+  animation: m-shimmer 2.8s linear infinite; }
+@keyframes m-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.m-wait-note { margin: var(--space-1) auto 0; max-width: 380px; font-size: var(--fs-label); line-height: var(--lh-label); text-wrap: balance; }
+@media (prefers-reduced-motion: reduce) { .m-wait::after { display: none; } .m-wait-title { animation: none; background: none; color: var(--text); } }
 .m-empty-actions { display: flex; justify-content: center; gap: var(--space-2); } /* a practice server's busy or stopped message: what to do */
 .m-slice { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .m-counter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-height: 44px; padding: 0 var(--space-4);
@@ -197,8 +209,10 @@ dialog button { height: var(--h-button); padding: 0 var(--space-3); border-radiu
 .shell-main > div > .shell-status { margin: 0; border-radius: 0; border-width: 0 0 1px; padding: 4px var(--space-4); font-size: var(--fs-label); line-height: var(--lh-label); }
 
 /* Follow-up scans: the earlier scan's nodules, one line each */
-.m-earlier { display: flex; align-items: center; gap: var(--space-2); min-height: calc(2 * var(--lh-body)); } /* two label lines: Measure here beside Find wraps the label, and the row keeps its height */
-.m-earlier > :first-child { flex: 1 1 auto; min-width: 0; } /* the label shrinks and wraps; the buttons stay together on one line */
+.m-sub { margin: 0; font: var(--fw-semibold) var(--fs-body)/var(--lh-body) var(--font-ui); color: var(--text); } /* a panel section's heading: the weight of the drawer's "Recorded nodules" */
+.m-earlier-head { display: flex; align-items: baseline; gap: var(--space-2); }
+.m-earlier { display: flex; align-items: center; gap: var(--space-2); }
+.m-earlier-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* one line: a long label is cut, never wrapped; the buttons stay beside it */
 .m-earlier > .m-row { flex: none; flex-wrap: nowrap; }
 
 /* The Patients panel: a button in the drop-down's place, the patient's other scans beside it, a sheet over the viewer */
@@ -214,7 +228,7 @@ dialog button { height: var(--h-button); padding: 0 var(--space-3); border-radiu
 .pp-sheet { position: absolute; z-index: 1; left: 0; top: calc(100% + 8px); width: min(800px, calc(100vw - 32px)); max-height: calc(100dvh - 160px); box-sizing: border-box;
   display: grid; grid-template-columns: 270px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; overflow: hidden;
   background: var(--bg-panel); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); }
-.pp-sheet.choosing { display: block; overflow: auto; padding: 0 var(--space-4); }
+.pp-sheet.choosing { display: flex; flex-direction: column; height: 460px; } /* (a) one height in every folder: the sheet never jumps as you move */
 .pp-left { display: flex; flex-direction: column; min-height: 0; padding: 12px 0 8px; border-right: 1px solid var(--line); }
 .pp-search { display: flex; align-items: center; gap: 8px; height: 32px; margin: 0 12px 8px; padding: 0 10px; box-sizing: border-box; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text-muted); }
 .pp-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 13.5px; }
@@ -226,8 +240,8 @@ dialog button { height: var(--h-button); padding: 0 var(--space-3); border-radiu
 .pp-pt:hover { background: #262625; }
 .pp-pt.on { background: var(--bg-card); box-shadow: inset 3px 0 0 var(--accent); }
 .pp-pt b { font-weight: var(--fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pp-pt small { grid-column: 1; font-size: 12px; color: var(--text-muted); }
-.pp-pt .pp-n { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-size: 12px; color: var(--text-muted); }
+.pp-pt small { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* one line: the count sits beside the name */
+.pp-pt .pp-n { grid-row: 1; grid-column: 2; align-self: center; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 .pp-none { margin: 8px 14px; font-size: var(--fs-label); color: var(--text-muted); }
 .pp-right { min-height: 0; overflow-y: auto; padding: 12px 14px; }
 .pp-rh { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
@@ -244,12 +258,35 @@ dialog button { height: var(--h-button); padding: 0 var(--space-3); border-radiu
 .pp-chip { padding: 1px 8px; border-radius: var(--radius-pill); border: 1px solid var(--line-strong); font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
 .pp-chip.ok { border-color: var(--ok-line); color: var(--ok); }
 .pp-foot { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 9px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--text-muted); }
+.pp-foot code { white-space: nowrap; } /* the fetch command never breaks inside --all */
 .pp-error { flex-basis: 100%; color: var(--warn); }
 .pp-privacy { display: inline-flex; align-items: center; gap: 6px; }
 .pp-privacy i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
 .pp-steps { display: flex; gap: var(--space-2); width: calc(16em + var(--space-2)); font-size: 13px; }
 .pp-step { width: 8em; } /* one width for "‹ Baseline" and "‹ Follow-up" */
 .pp-nw { white-space: nowrap; }
+/* (a) Change folder…: the folder view in the sheet's place, in the sheet's own look */
+.pp-fold { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.pp-fold-head { padding: 14px 14px 10px; }
+.pp-fold-head h2 { margin: 0; font-size: 16px; line-height: 24px; font-weight: var(--fw-semibold); }
+.pp-fold-head p { margin: 2px 0 0; font-size: 13px; line-height: 18px; color: var(--text-muted); }
+.pp-fold-bar { display: flex; align-items: center; gap: 8px; min-height: 40px; margin: 0 14px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.pp-crumbs { flex: 1; min-width: 0; }
+.pp-crumbs ol { display: flex; flex-wrap: wrap; align-items: center; margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
+.pp-crumbs li + li::before { content: "›"; margin: 0 2px; color: var(--text-muted); }
+.pp-crumb, .pp-crumbs [aria-current] { display: inline-block; padding: 4px 6px; border: 0; border-radius: 6px; background: none; color: var(--text-muted); font: inherit; }
+.pp-crumb { cursor: pointer; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.pp-crumb:hover:not(:disabled) { background: var(--bg-card); color: var(--text); }
+.pp-crumbs [aria-current] { color: var(--text); font-weight: var(--fw-semibold); }
+.pp-path { flex: 1; display: flex; align-items: center; gap: 8px; }
+.pp-path .pp-search { flex: 1; margin: 0; }
+.pp-folders { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 6px; list-style: none; }
+.pp-folder { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px; border: 0; border-radius: 8px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.pp-folder:hover:not(:disabled) { background: #262625; }
+.pp-folder > svg, .pp-folder > i { flex: none; color: var(--text-muted); font-style: normal; }
+.pp-folder > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-fold .pp-foot { min-height: 52px; box-sizing: border-box; }
+.pp-fold .m-spin { display: inline-block; vertical-align: -1px; }
 .m-app .pp-sheet:focus-visible { outline: none; } /* the sheet itself takes the focus only in Change folder…: Tab goes on to its first control */
 
 /* The Patients panel on the hosted page, inside a frame from the engine on this computer. The slot keeps the size of the button and its steps;

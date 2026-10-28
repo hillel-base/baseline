@@ -669,7 +669,7 @@ def test_a_stroke_that_changes_nothing_is_400_logs_nothing_and_keeps_the_nodule(
     client.post(AXES, json=dict(**NOD, long_line=long_line, short_line=o["short_line"]))
     lines = len(log_path.read_text().splitlines())
     nothing = "That stroke changed nothing."
-    for body, detail in ((dict(points=[[10, 10]], mode="paint", snap=True), nothing + " Snap to tissue keeps out pixels at or below \u2212500 HU."),  # air
+    for body, detail in ((dict(points=[[10, 10]], mode="paint", snap=True), nothing + " Snap to tissue keeps out pixels below \u2212750 HU."),  # air
                          (dict(points=[[32, 32]], mode="paint", snap=False), nothing),  # inside the outline
                          (dict(points=[[10, 10]], mode="erase", snap=True), nothing)):  # outside it
         r = client.post(PAINT, json=dict(**NOD, z=4, radius=1, **body))

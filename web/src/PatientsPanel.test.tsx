@@ -60,9 +60,26 @@ test("the practice server's sheet: no search, the practice texts, no folder and 
   expect(t).toContain("Practice patient 1RIDER Lung CT, TCIA");
   expect(t).toContain("Baselineopen nownot measured yetOpen");
   expect(t).toContain("Follow-up · same daya repeat scan, for measuring twicenot measured yetOpen");
-  expect(t).toContain("Public practice scans only; no folders on a practice server.");
+  expect(t).toContain("All 28 public practice patients. No folders on a practice server.");
+  expect(t).not.toContain("fetch --all"); // a local command: it does not apply on a practice server
   for (const no of ["Search patients", "Folder:", "Change folder…", "Names and dates", "Test scan"]) expect(t).not.toContain(no);
   expect(renderToString(<Sheet data={practiceData} current="RIDER-1_test" rows={[]} practice busy={false} {...none} />)).not.toContain("<input");
+});
+
+test("the local engine's sheet with only the data folder: how many practice patients it holds, and the command for all 28 (in code type); none once all 28 are there or a study folder is chosen", () => {
+  const data = (n: number) => ({ folder: { path: null, from: null, error: null }, patients: Array.from({ length: n }, (_, i) => ({ key: `RIDER-${i}`, name: `RIDER-${i}`, source: "data", scans: [] })) }) as never as Patients;
+  const html = renderToString(<Sheet data={data(8)} current="" rows={[]} practice={false} busy={false} {...none} />);
+  expect(text(html)).toContain("8 of 28 practice patients. For all 28, run ./lung.sh fetch --all in the Baseline folder (Windows: .\\lung.ps1 fetch --all).");
+  expect(html).toContain("<code>./lung.sh fetch --all</code>");
+  expect(text(renderToString(<Sheet data={data(28)} current="" rows={[]} practice={false} busy={false} {...none} />))).not.toContain("fetch --all");
+  expect(text(renderToString(<Sheet data={lab()} current="" rows={[]} practice={false} busy={false} {...none} />))).not.toContain("fetch --all");
+});
+
+test("the local engine's data folder (the public practice scans): the practice panel's lines, never RIDER's series names", () => {
+  const t = text(renderToString(<Sheet data={practiceData} current="RIDER-1_retest" rows={[]} practice={false} busy={false} {...none} />));
+  expect(t).toContain("Follow-up · same daya repeat scan, for measuring twice · open now");
+  for (const no of ["Test scan", "Retest scan"]) expect(t).not.toContain(no);
+  expect(text(renderToString(<Sheet data={lab()} current="F-00000002" rows={[]} practice={false} busy={false} {...none} />))).toContain("Series 4 · 1 mm"); // a study folder keeps its own series line
 });
 
 test("the button says where you are, with the patient's other scans beside it; it waits while the engine reads the folder", () => {

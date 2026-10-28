@@ -1160,12 +1160,13 @@ const followup = async (page: import("@playwright/test").Page) => {
 
   await openScan(page, "RIDER-1286684383_retest");
   const retest = await (await page.request.get("/api/scans/RIDER-1286684383_retest")).json();
-  await expect(earlier).toContainText(/N1 · Image \d+ on test/, { timeout: 60_000 });
+  await expect(earlier).toContainText(/^Earlier nodulesfrom the BaselineN1 · Image \d+Find/, { timeout: 60_000 }); // (c) the page's word for the scan, never "test"
   const mapped = page.waitForResponse((r) => r.url().includes("/map?"), { timeout: 120_000 });
   await earlier.getByRole("button", { name: "Find N1" }).click();
   const m = await (await mapped).json();
   expect(m.outside).toBeUndefined();
   await expect(panel).toContainText("N1? Check here.");
+  expect((await earlier.locator(".m-earlier").boundingBox())!.height).toBeLessThanOrEqual(32); // (c) one line, with Measure here and Find beside it
   await expect(counter).toHaveText(`Image ${retest.instance_numbers[m.z]} / ${retest.shape[0]}`);
   await expect.poll(() => marks.getAttribute("data-target")).toMatch(/^\[/); // the ring is drawn on this image
   await expect(canvas).toHaveAttribute("data-z", String(m.z)); // and the image itself has arrived
@@ -1393,8 +1394,8 @@ test("Patients panel: open it, search, open a scan, Alt+→ opens the follow-up,
   await expect(sheet.getByText("Patients · 1", { exact: true })).toBeVisible();
   await expect(sheet).toContainText("RIDER-12866843832 scans, oldest first");
   const items = sheet.getByRole("listitem");
-  await expect(items.nth(0)).toContainText(/^Baseline · \d+ \w{3} \d{4}Test scannot measured yet/);
-  await expect(items.nth(1)).toContainText(/^Follow-up · \d+ \w{3} \d{4} · same dayRetest scannot measured yet/);
+  await expect(items.nth(0)).toContainText(/^Baseline · \d+ \w{3} \d{4}not measured yet/);
+  await expect(items.nth(1)).toContainText(/^Follow-up · \d+ \w{3} \d{4} · same daya repeat scan, for measuring twicenot measured yet/);
   await sheet.getByRole("button", { name: /^Open Baseline/ }).click();
   await expect(sheet).toHaveCount(0);
   await expect(page.getByText(/^Image \d+ \/ 265$/)).toBeVisible({ timeout: 60_000 });
@@ -1409,7 +1410,7 @@ test("Patients panel: open it, search, open a scan, Alt+→ opens the follow-up,
   await expect(page.getByRole("button", { name: "‹ Baseline" })).toBeVisible();
   expect((await picker(page).boundingBox())!.width).toBe(width); // the button keeps its width
   await picker(page).click();
-  await expect(items.filter({ hasText: "open now" })).toHaveText(/^Follow-up .*Retest scan · open now/);
+  await expect(items.filter({ hasText: "open now" })).toHaveText(/^Follow-up .*a repeat scan, for measuring twice · open now/);
   await expect(sheet.getByRole("button", { name: /^Open Follow-up/ })).toHaveClass(/primary/);
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
@@ -1425,16 +1426,47 @@ test("Patients panel: open it, search, open a scan, Alt+→ opens the follow-up,
   await page.waitForTimeout(500);
   expect(starts).toEqual([]);
 
-  // Change folder…: the folder browser in the sheet; the browse root itself is refused with the engine's own words; a folder inside it is read and listed
+  // Change folder…: the folder browser in the sheet; the browse root itself is not offered; a folder inside it is read and listed
   await picker(page).click();
   await sheet.getByRole("button", { name: "Change folder…" }).click();
   const browser = sheet.getByRole("region", { name: "Choose the study folder" });
+  const here = browser.getByRole("navigation", { name: "Folder path" }).locator('[aria-current="location"]'); // the breadcrumb's last part
+  const use = browser.getByRole("button", { name: "Use this folder" });
+  await expect(browser).toContainText("The folder that holds the study's CT scans. Subfolders are read too.");
   await expect(browser.getByRole("button", { name: "scan", exact: true })).toBeVisible();
-  await browser.getByRole("button", { name: "Choose this folder" }).click();
-  await expect(browser.getByRole("alert")).toHaveText("Choose a folder inside the allowed area, not the whole area itself.");
+  await expect(here).toHaveText("Top folder");
+  await expect(browser).toContainText("Open the study's folder in the list."); // the top itself is refused: the next step instead
+  // (a) the keyboard: Enter on a row opens it and the focus goes on to its first subfolder; a crumb goes back up; Esc goes back to the patient list, not out of the sheet
+  await browser.getByRole("button", { name: "made-up", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(here).toHaveText("made-up");
+  await expect(browser.getByRole("button", { name: "Doe Jane", exact: true })).toBeFocused();
+  await expect(browser).toContainText("Reads the CT series in its subfolders."); // none directly in it
+  await browser.getByRole("button", { name: "Top folder" }).click();
+  await expect(here).toHaveText("Top folder");
+  await page.keyboard.press("Escape");
+  await expect(browser).toHaveCount(0);
+  await expect(sheet.getByRole("searchbox", { name: "Search patients" })).toBeFocused(); // the patient list again, as the sheet opens
+  await sheet.getByRole("button", { name: "Change folder…" }).click();
+  await expect(use).toBeDisabled(); // the top itself is never offered (the engine refuses it): the line gives the next step instead
+  await browser.getByRole("button", { name: "Type a path" }).click();
+  await expect(browser.getByRole("textbox", { name: "Folder path" })).toBeFocused();
+  await browser.getByRole("button", { name: "Show the folders" }).click();
+  await expect(browser.getByRole("button", { name: "made-up", exact: true })).toBeFocused(); // the first folder row
   await browser.getByRole("button", { name: "scan", exact: true }).click();
-  await expect(browser).toContainText("Folder: /scan");
-  await browser.getByRole("button", { name: "Choose this folder" }).click();
+  await expect(here).toHaveText("scan");
+  await expect(browser).toContainText("Reads the CT series here and in its subfolders."); // no count: the engine reads only the axial CT among them
+  await expect(browser.getByRole("alert")).toHaveCount(0); // a move clears the refusal
+  let release!: () => void; // the read held, so its state can be checked
+  await page.route("**/api/patients/folder", async (r) => { await new Promise<void>((ok) => { release = ok; }); await r.continue(); }, { times: 1 });
+  await use.click();
+  await expect(browser.getByRole("status")).toHaveText("Reading the folder…");
+  await expect(browser.getByRole("button", { name: "Cancel" })).toBeDisabled(); // the read cannot be cancelled, so nothing offers to
+  await page.keyboard.press("Escape");
+  await expect(browser).toBeVisible(); // and Esc waits too
+  await page.locator(".pp-backdrop").click({ position: { x: 5, y: 5 } });
+  await expect(browser).toBeVisible(); // and so does a click beside the sheet, so a refusal is never missed
+  release();
   await expect(sheet).toContainText("Folder: /scan", { timeout: 30_000 }); // the panel again, read from the new folder
   await expect(sheet.getByRole("button", { name: "Change folder…" })).toBeVisible();
   await expect(sheet.getByRole("searchbox", { name: "Search patients" })).toHaveValue("");

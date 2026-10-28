@@ -1,6 +1,6 @@
 import { readFileSync, rmSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { FRAME_BLOCKED, WAITING_LOCAL } from "../src/texts";
+import { FRAME_BLOCKED, OPEN_WAIT_PRACTICE, WAITING_LOCAL } from "../src/texts";
 
 const imageReady = (page: Page) => expect(page.getByText(/^Loading (image|slice index) \d+…$/)).toHaveCount(0, { timeout: 30_000 }); // a click waits for the right image
 
@@ -459,6 +459,53 @@ test("hosted: on the Study table tab the arrow and zoom keys do not reach the hi
   await expect(counter).not.toHaveText(before);
 });
 
+// (b) Timings on the fake client, slowed as the live Base44 was measured (about 600 ms a list): when the Study table tab is pressed, when its two lists
+// were asked, and when its rows show (by performance.now() in the page).
+const timing = (page: Page) => page.addInitScript(() => {
+  const w = window as unknown as { __tabAt?: number; __rowsAt?: number };
+  addEventListener("click", (e) => { if ((e.target as Element).closest?.('[role="tab"]')?.textContent === "Study table") { w.__tabAt = performance.now(); w.__rowsAt = undefined; } }, true);
+  new MutationObserver(() => { if (w.__tabAt !== undefined && w.__rowsAt === undefined && document.querySelector('table[aria-label="Study record"] tbody tr')) w.__rowsAt = performance.now(); })
+    .observe(document, { childList: true, subtree: true });
+});
+const times = (page: Page) => page.evaluate(() => { const w = window as unknown as { __tabAt: number; __rowsAt: number; __fakeLists?: number[] }; return { tab: w.__tabAt, rows: w.__rowsAt, lists: w.__fakeLists ?? [] }; });
+const rect = (l: import("@playwright/test").Locator) => l.evaluate((e) => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height].map(Math.round); });
+test("hosted Study table (b): its rows load with the signed-in page, so the tab opens with them and loads them again; on a slow Base44 the table's own layout shows placeholder rows, which the rows replace in place", async ({ page }) => {
+  await seed(page);
+  await timing(page);
+  await page.addInitScript(() => { if (!localStorage.getItem("lung.fake.listDelay")) localStorage.setItem("lung.fake.listDelay", "600"); });
+  const tab = page.getByRole("tab", { name: "Study table" }), n1 = page.getByRole("row", { name: /a1b2c3d4 N1/ });
+  // The tab pressed 1.5 s after the page loaded
+  await page.goto("/");
+  await expect(tab).toBeVisible();
+  await page.waitForTimeout(1500);
+  await tab.click();
+  await expect(n1).toBeVisible();
+  let t = await times(page);
+  console.log(`(b) tab pressed 1.5 s after the page: lists asked at ${t.lists.map((x) => (x - t.tab).toFixed(0)).join(", ")} ms from the press; rows shown ${(t.rows - t.tab).toFixed(0)} ms after it`);
+  expect(t.rows - t.tab).toBeLessThan(150); // at once: the page loaded them already
+  expect(t.lists.filter((x) => x < t.tab)).toHaveLength(2); // when the signed-in page loaded
+  await expect.poll(async () => (await times(page)).lists.filter((x) => x >= t.tab).length).toBe(2); // and again when the tab opened, so a Record made meanwhile shows
+
+  // The tab pressed as soon as it shows, on a slower Base44 (2 s): the table's own card, title row and column header, with placeholder rows
+  await page.evaluate(() => localStorage.setItem("lung.fake.listDelay", "2000"));
+  await page.reload();
+  await tab.click();
+  const st = page.getByRole("region", { name: "Study table" }), skeleton = st.locator(".st-skel");
+  await expect(st.getByRole("status")).toHaveText("Loading the study table…");
+  await expect(skeleton.locator("tbody tr")).toHaveCount(3);
+  await expect(st.getByRole("heading", { name: "Study table" })).toBeVisible();
+  await expect(skeleton.locator("thead tr").first()).toHaveText(/^Patient\s*Nodule\s*Baseline\s*Follow-up/);
+  await page.screenshot({ path: "e2e/screenshots/study-loading.png" });
+  const was = { head: await rect(st.locator(".st-head")), thead: await rect(skeleton.locator("thead")), row: await rect(skeleton.locator("tbody tr").first()) };
+  await expect(n1).toBeVisible({ timeout: 10_000 });
+  t = await times(page);
+  console.log(`(b) tab pressed at once, Base44 at 2 s a list: lists asked at ${t.lists.map((x) => (x - t.tab).toFixed(0)).join(", ")} ms from the press; rows shown ${(t.rows - t.tab).toFixed(0)} ms after it`);
+  await expect(skeleton).toHaveCount(0);
+  await expect(st.getByText("Loading the study table…")).toHaveCount(0);
+  const table = st.getByRole("table", { name: "Study record" });
+  expect({ head: await rect(st.locator(".st-head")), thead: await rect(table.locator("thead")), row: await rect(table.locator("tbody tr").first()) }).toEqual(was); // in place: nothing moves
+});
+
 test("hosted Study table: with no rows, the empty state's Go to Measure opens the Measure tab", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("tab", { name: "Study table" }).click();
@@ -563,7 +610,8 @@ test("practice: the Patients panel lists the practice patients with their labels
   await expect(sheet).toContainText("Practice patient 1RIDER Lung CT, TCIA");
   const items = sheet.getByRole("listitem");
   await expect(items).toHaveText(["Baselinenot measured yetOpen", "Follow-up · same daya repeat scan, for measuring twicenot measured yetOpen"]);
-  await expect(sheet).toContainText("Public practice scans only; no folders on a practice server.");
+  await expect(sheet).toContainText("All 28 public practice patients. No folders on a practice server.");
+  await expect(sheet).not.toContainText("fetch --all"); // a local command: it does not apply here
   for (const no of ["Folder:", "Change folder…", "Names and dates", "Test scan"]) await expect(sheet.getByText(no)).toHaveCount(0);
   await expect(sheet.getByRole("searchbox")).toHaveCount(0);
   await sheet.getByRole("button", { name: /^Open Baseline/ }).click();
@@ -574,6 +622,25 @@ test("practice: the Patients panel lists the practice patients with their labels
   await expect(items.first()).toHaveText("Baselineopen nownot measured yetOpen");
   await page.screenshot({ path: "e2e/screenshots/practice-patients-panel.png" });
   expect(seen.filter((s) => s.path === "/api/patients")).toEqual([{ path: "/api/patients", auth: TOKEN }]); // asked once, signed in like every practice call
+});
+
+test("practice: while a scan opens, the image area says the time to expect; the scan line and the shimmer move, and stand still under reduced motion", async ({ page }) => {
+  await practice(page, engine(false), (path) => (path === "/api/patients" ? PRACTICE_PATIENTS : SCANS));
+  await page.route(new RegExp(`^${PRACTICE}/api/scans/RIDER-`), () => {}); // the scan's request is held: it stays opening
+  await page.goto("/");
+  await card(page).getByRole("button", { name: "Practice server" }).click();
+  await page.locator('button[aria-haspopup="dialog"]').click();
+  await page.getByRole("dialog", { name: "Patients" }).getByRole("button", { name: /^Open Baseline/ }).click();
+  await expect(page.getByRole("status").filter({ hasText: /^Loading scan…/ })).toHaveText(`Loading scan…${OPEN_WAIT_PRACTICE}`);
+  const square = page.locator(".m-wait");
+  await expect(square).toHaveAttribute("aria-hidden", "true");
+  const moving = () => page.evaluate(() => [getComputedStyle(document.querySelector(".m-wait")!, "::after"), getComputedStyle(document.querySelector(".m-wait-title")!)]
+    .map((c) => (c.display === "none" ? "none" : c.animationName)));
+  expect(await moving()).toEqual(["m-sweep", "m-shimmer"]);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  expect(await moving()).toEqual(["none", "none"]);
+  await expect(square).toBeVisible(); // the still square and both texts stay
+  await expect(page.getByText(OPEN_WAIT_PRACTICE)).toBeVisible();
 });
 
 test("install: How to install it and the footer link open Run it on your computer in the page; Copy copies the command; Back to Measure returns", async ({ page, context }) => {
@@ -916,8 +983,8 @@ test("hosted: the Patients frame: the page cannot read it; Change folder… and 
     await sheet.getByRole("button", { name: "Change folder…" }).click();
     const browser = sheet.getByRole("region", { name: "Choose the study folder" });
     await browser.getByRole("button", { name: "made-up", exact: true }).click();
-    await expect(browser).toContainText("Folder: /made-up");
-    await browser.getByRole("button", { name: "Choose this folder" }).click();
+    await expect(browser.getByRole("navigation", { name: "Folder path" }).locator('[aria-current="location"]')).toHaveText("made-up");
+    await browser.getByRole("button", { name: "Use this folder" }).click();
     await expect(sheet).toContainText("Folder: /made-up", { timeout: 60_000 });
     await expect(sheet.getByRole("button", { name: /^Okafor, Sam/ })).toBeVisible();
     await sheet.getByRole("button", { name: /^Doe, Jane/ }).click();
@@ -1151,7 +1218,7 @@ test("coded: the hosted page shows codes only; click, Record, Find and copy_row 
 
   await openFromFrame(page, "Jane_Doe_Test", /^Open Follow-up/);
   const earlier = panel.getByRole("group", { name: "Earlier nodules" });
-  await expect(earlier).toContainText(/N1 · Image \d+ on test/, { timeout: 60_000 });
+  await expect(earlier).toContainText(/^Earlier nodulesfrom the BaselineN1 · Image \d+Find/, { timeout: 60_000 }); // (c) the page's word for the scan, never "test"
   const mapped = page.waitForResponse((r) => r.url().includes("/map?"), { timeout: 120_000 });
   await earlier.getByRole("button", { name: "Find N1" }).click();
   expect((await (await mapped).json()).outside).toBeUndefined();

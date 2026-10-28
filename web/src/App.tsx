@@ -5,6 +5,7 @@ import { distanceMm, earlierRows, firstClick } from "./followup";
 import { backUpRows, captionLines, forgetCleared, loadCleared, loadCounters, loadRecorded, nextNodule, reloadFor, restoreCleared, saveCounters, saveRecorded, rememberScanId, scanIdOf, scanKey, screenshotName, toCSV, toRow, toTSV, type RecordedNodule } from "./record";
 import type { SaveState } from "./study";
 import { About } from "./About";
+import { OPEN_WAIT_LOCAL, OPEN_WAIT_PRACTICE } from "./texts";
 import { Copilot } from "./Copilot";
 import { Earlier, Panel } from "./Panel";
 import { PatientsFrame, countsOf } from "./PatientsFrame";
@@ -31,7 +32,7 @@ const STEPS = "The patient's previous or next scan (beside the Patients button)"
 const SHORTCUTS: [ReactNode, string][] = [
   [<><K k="↑" /> <K k="↓" /> or wheel</>, "Previous or next image"], [<K k="A" />, "Add mode"], [<K k="R" />, "Remove mode"],
   [<>Hold <K k="Shift" /></>, "Remove for one click"], [<K k="P" />, "Paint mode: drag on the image to paint"], [<K k="E" />, "Erase mode: drag on the image to erase"],
-  [<><K k="[" /> <K k="]" /></>, "Smaller or larger brush"], [<K k="T" />, "Snap to tissue: paint only tissue, not air (Paint mode)"],
+  [<><K k="[" /> <K k="]" /></>, "Smaller or larger brush"], [<K k="T" />, "Snap to tissue: paint only −750 HU and above, so air stays out and ground glass stays in (Paint mode)"],
   [<K k="X" />, "Axes mode: drag an end of an axis line on the largest slice to set that axis by hand"], [<K k="U" />, "Undo the last action: a click, a stroke or a dragged axis"], [<K k="S" />, "Start over: throw away this outline, same nodule"],
   [<K k="G" />, "Go to the largest slice"], [<><K k="+" /> <K k="−" /></>, "Zoom in or out (= also zooms in)"], ["Ctrl+wheel, pinch", "Zoom about the cursor"],
   [<><K k="Space" />+drag</>, "Pan"], [<K k="Z" />, "Zoom to area: drag a rectangle (Esc cancels)"], [<K k="F" />, "Fit: the whole image, 100 %"],
@@ -50,6 +51,13 @@ export function download(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
 }
+
+/** The wait while a scan opens: a blank image square with a scan line (motion only), the title and the time to expect.
+ * A practice server is the hosted page with the panel (the Shell passes panel for one only); anything else is the local engine. */
+export const ScanWait = ({ embedded, panel }: { embedded: boolean; panel: boolean }) => (
+  <><div className="m-wait" aria-hidden="true" />
+    <div role="status"><p className="m-wait-title">Loading scan…</p><p className="m-wait-note">{embedded && panel ? OPEN_WAIT_PRACTICE : OPEN_WAIT_LOCAL}</p></div></>
+);
 
 // embedded: the hosted shell supplies the heading and the footer. Folders open only through the Patients panel (its Change folder…), on the engine's own page or in its frame.
 // overlay: a practice server's busy or stopped message, shown once, in the image area in place of the image.
@@ -424,7 +432,7 @@ export function App({ embedded = false, panel = true, frame, overlay, onRecorded
               {error ? <p role="alert">{error === true ? "Engine not running. Start it with the command in README." : error}</p>
                 : scans?.length === 0 ? <p role="alert">No scans found. Fetch the data (README step 1) or set LUNG_DATA_DIR.</p>
                 : openFailed ? <p role="alert">{`Could not open ${openFailed}.`}</p>
-                : loading ? <p>Loading scan…</p>
+                : loading ? <ScanWait embedded={embedded} panel={panel} />
                 : <p>{scans ? "Choose a scan to start." : "Looking for scans…"}</p>}
             </div>
           )}

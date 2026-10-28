@@ -7,7 +7,8 @@ export const signIn = () => { const w = window as unknown as { __fakeSignIn?: nu
 export const accessToken = () => "fake-base44-token"; // what a practice server gets in the e2e
 export const signOut = () => { try { localStorage.setItem("lung.fake.signedOut", "1"); } catch { /* the reload still shows the flag-less state */ } window.location.reload(); };
 // Kept under lung.fake.store, so a reload keeps the rows as Base44 would; a test page starts empty (each Playwright test has its own browser storage).
-// localStorage "lung.fake.saveFail"=1 makes every create fail.
+// localStorage "lung.fake.saveFail"=1 makes every create fail; "lung.fake.listDelay"=<ms> makes each list answer that much later, as a slow Base44 does
+// (window.__fakeLists: when each list was asked, by performance.now(), for the e2e's timings).
 const KEY = "lung.fake.store";
 const fail = () => { try { return localStorage.getItem("lung.fake.saveFail") === "1"; } catch { return false; } };
 const load = (): Record<string, Record<string, unknown>[]> => { try { return JSON.parse(localStorage.getItem(KEY) ?? "{}"); } catch { return {}; } };
@@ -20,6 +21,12 @@ const store = (name: string) => ({
     localStorage.setItem(KEY, JSON.stringify(all));
     return r as never;
   },
-  list: async () => (load()[name] ?? []) as never[],
+  list: async () => {
+    const w = window as unknown as { __fakeLists?: number[] }, rows = (load()[name] ?? []) as never[]; // the rows as they are when asked
+    (w.__fakeLists ??= []).push(performance.now());
+    const ms = (() => { try { return Number(localStorage.getItem("lung.fake.listDelay") ?? 0); } catch { return 0; } })();
+    if (ms > 0) await new Promise((ok) => setTimeout(ok, ms));
+    return rows;
+  },
 });
 export const entities = { Scan: store("Scan"), NoduleMeasurement: store("NoduleMeasurement") };

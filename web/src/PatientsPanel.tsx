@@ -18,6 +18,7 @@ export function Sheet({ data, current, rows, practice, busy, onOpen, onChangeFol
   const list = search(byActivity(data.patients, rows), q);
   const p = list.find((x) => x.key === shown) ?? list[0]; // a search that leaves the shown patient out shows its first match
   const { folder } = data;
+  const fewer = data.patients.filter((x) => x.source === "data").length; // the data folder's practice patients: a local install has 8 of the 28 until fetch --all
   return <>
     <div className="pp-left">
       {!practice && <label className="pp-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="Search patients" aria-label="Search patients" value={q} onChange={(e) => setQ(e.target.value)} /></label>}
@@ -36,7 +37,7 @@ export function Sheet({ data, current, rows, practice, busy, onOpen, onChangeFol
         <div className="pp-rh"><b>{p.name}</b><span>{practice ? "RIDER Lung CT, TCIA" : p.scans.length === 1 ? "1 scan" : `${p.scans.length} scans, oldest first`}</span></div>
         <ol className="pp-tl">
           {p.scans.map((s) => {
-            const cur = s.id === current, n = recordedOn(rows, s.id), title = scanTitle(s), line = practice ? PRACTICE_LINE[s.timepoint] : s.label;
+            const cur = s.id === current, n = recordedOn(rows, s.id), title = scanTitle(s), line = practice || p.source === "data" ? PRACTICE_LINE[s.timepoint] : s.label; // the data folder holds the public practice scans: their lines, not RIDER's series names
             return (
               <li key={s.id} className={cur ? "pp-sc cur" : "pp-sc"}>
                 <b>{title}</b>
@@ -50,9 +51,10 @@ export function Sheet({ data, current, rows, practice, busy, onOpen, onChangeFol
       </>}
     </div>
     <div className="pp-foot">
-      {practice ? <span>Public practice scans only; no folders on a practice server.</span> : <>
+      {practice ? <span>All 28 public practice patients. No folders on a practice server.</span> : <>
         {folder.error && <span className="pp-error" role="alert">{folder.error}</span>}
         {folder.path != null ? <span>Folder: /{folder.path}</span> : !folder.from && <span>No study folder chosen yet.</span>}
+        {folder.path == null && !folder.from && fewer > 0 && fewer < 28 && <span>{fewer} of 28 practice patients. For all 28, run <code>./lung.sh fetch --all</code> in the Baseline folder (Windows: <code>.\lung.ps1 fetch --all</code>).</span>}
         {folder.from === "LUNG_STUDY_DIR" ? <span>Set by LUNG_STUDY_DIR on this computer.</span> : <button className="m-btn sm ghost" onClick={onChangeFolder}>Change folder…</button>}
         <span className="grow" />
         <span className="pp-privacy"><i aria-hidden="true" />Names and dates are shown by your computer; Base44 receives only codes.</span>
@@ -67,6 +69,7 @@ export function PatientsPanel({ data, current, rows, practice, busy, onOpen, onC
   onOpen: (id: string) => void; onChosen: (p: Patients) => void; onSheet?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [choosing, setChoosing] = useState(false); // Change folder…: the folder browser takes the sheet's place
+  const reading = useRef(false); // the folder browser's Use this folder is reading: Esc waits (the read cannot be cancelled)
   const btn = useRef<HTMLButtonElement>(null), sheet = useRef<HTMLDivElement>(null);
   const fromKeys = useRef(false); // opened from the keyboard: Esc gives the focus back to the button
   const close = () => { setOpen(false); setChoosing(false); }; // after Open the focus stays off the button, so Enter records
@@ -80,7 +83,7 @@ export function PatientsPanel({ data, current, rows, practice, busy, onOpen, onC
   useEffect(() => { // While open, no key reaches the Measure controls or the viewer, and Tab stays in the sheet
     if (!open) return;
     const trap = (e: KeyboardEvent) => {
-      if (e.key === "Escape") return dismiss();
+      if (e.key === "Escape") return choosing ? !reading.current && setChoosing(false) : dismiss(); // (a) in Change folder…, Esc goes back to the patient list
       if (e.key === "Tab" && sheet.current) {
         const f = [...sheet.current.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), a[href]")];
         const i = wrapTab(f.indexOf(document.activeElement as HTMLElement), f.length, e.shiftKey);
@@ -90,7 +93,7 @@ export function PatientsPanel({ data, current, rows, practice, busy, onOpen, onC
     };
     window.addEventListener("keydown", trap, true);
     return () => window.removeEventListener("keydown", trap, true);
-  }, [open]);
+  }, [open, choosing]);
   useEffect(() => { // The focus goes into the sheet: the search box, else the shown patient's row; the folder browser gets the sheet itself
     const s = sheet.current;
     if (open && s) (choosing ? s : s.querySelector<HTMLElement>('input[type="search"], .pp-pt[aria-pressed="true"]') ?? s).focus();
@@ -109,10 +112,10 @@ export function PatientsPanel({ data, current, rows, practice, busy, onOpen, onC
         <span className="pp-caret" aria-hidden="true">▾</span>
       </button>
       <span className="pp-steps">{step(at?.prev, "prev")}{step(at?.next, "next")}</span>{/* room for both, always: a step coming or going never wraps the bar */}
-      {open && data && <div className="pp-backdrop" onClick={close} />}{/* a mouse click: no focus back on the button, so Enter records (Esc gives it back to a keyboard opener) */}{/* a click beside the sheet only closes it: it never reaches the image as a first click */}
+      {open && data && <div className="pp-backdrop" onClick={() => { if (!reading.current) close(); }} />}{/* a mouse click: no focus back on the button, so Enter records (Esc gives it back to a keyboard opener) */}{/* a click beside the sheet only closes it: it never reaches the image as a first click */}
       {open && data && (
         <div ref={sheet} className={choosing ? "pp-sheet choosing" : "pp-sheet"} role="dialog" aria-modal="true" aria-label="Patients" tabIndex={-1}>
-          {choosing ? <FolderPanel onClose={() => setChoosing(false)} onChosen={(p) => { onChosen(p); setChoosing(false); }} />
+          {choosing ? <FolderPanel onClose={() => setChoosing(false)} onChosen={(p) => { onChosen(p); setChoosing(false); }} onBusy={(b) => { reading.current = b; }} />
             : <Sheet data={data} current={current} rows={rows} practice={practice} busy={busy} onChangeFolder={() => setChoosing(true)}
               onOpen={(id) => { close(); if (id !== current) onOpen(id); }} />}
         </div>
