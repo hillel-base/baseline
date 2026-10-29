@@ -9,6 +9,8 @@
 
 <p align="center">Outline and measure a lung nodule on CT in one click, then correct it with a few more.</p>
 
+<p align="center"><b><a href="docs/Baseline-one-pager.pdf">Read the one-page summary (PDF)</a></b></p>
+
 <p align="center">
   <a href="https://github.com/hillel-base/baseline/actions/workflows/windows-setup.yml"><img src="https://github.com/hillel-base/baseline/actions/workflows/windows-setup.yml/badge.svg" alt="windows-setup"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
